@@ -1,0 +1,49 @@
+# .github/workflows/release.yml
+
+name: Create GitHub Release for WorkerAnalysisGUI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 이 프로젝트에 필요한 라이브러리가 있다면 requirements.txt를 만들어야 합니다.
+          # pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        # WorkerAnalysisGUI.py를 빌드하고, assets과 config 폴더를 포함합니다.
+        run: pyinstaller --onefile --windowed --name="WorkerAnalysisGUI_Setup" --add-data "assets;assets" --add-data "config;config" WorkerAnalysisGUI.py
+
+      - name: Zip the executable
+        # 압축 파일 이름을 WorkerAnalysisGUI로 지정합니다.
+        run: |
+          Compress-Archive -Path dist/WorkerAnalysisGUI_Setup.exe -DestinationPath "WorkerAnalysisGUI-${{ github.ref_name }}.zip"
+      
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "WorkerAnalysisGUI-${{ github.ref_name }}.zip"
+          name: "Release ${{ github.ref_name }}"
+          body: "New release version ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
