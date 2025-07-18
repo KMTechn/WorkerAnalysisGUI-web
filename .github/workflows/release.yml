@@ -1,5 +1,3 @@
-# .github/workflows/release.yml
-
 name: Create GitHub Release for WorkerAnalysisGUI
 
 on:
@@ -26,18 +24,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # 이 프로젝트에 필요한 라이브러리가 있다면 requirements.txt를 만들어야 합니다.
-          # pip install -r requirements.txt
+          pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build with PyInstaller
-        # WorkerAnalysisGUI.py를 빌드하고, assets과 config 폴더를 포함합니다.
-        run: pyinstaller --onefile --windowed --name="WorkerAnalysisGUI_Setup" --add-data "assets;assets" --add-data "config;config" WorkerAnalysisGUI.py
+      - name: Build with PyInstaller (One-Folder mode)
+        # 요청하신 명령어를 기반으로, 안정성을 위해 hidden-import 옵션을 추가했습니다.
+        run: pyinstaller --name "WorkerAnalysisGUI" --onedir --windowed --icon="assets/logo.ico" --add-data "assets;assets" --add-data "config;config" --hidden-import pandas --hidden-import tkcalendar --hidden-import watchdog.observers --hidden-import matplotlib --hidden-import Pillow WorkerAnalysisGUI.py
 
-      - name: Zip the executable
-        # 압축 파일 이름을 WorkerAnalysisGUI로 지정합니다.
+      - name: Zip the build folder
+        # 빌드된 폴더 전체(dist/WorkerAnalysisGUI)를 압축합니다.
         run: |
-          Compress-Archive -Path dist/WorkerAnalysisGUI_Setup.exe -DestinationPath "WorkerAnalysisGUI-${{ github.ref_name }}.zip"
+          Compress-Archive -Path dist/WorkerAnalysisGUI -DestinationPath "WorkerAnalysisGUI-${{ github.ref_name }}.zip"
       
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2

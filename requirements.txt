@@ -1,0 +1,9 @@
+requests
+pandas
+numpy
+matplotlib
+Pillow
+tkcalendar
+watchdog
+openpyxl
+pygame
