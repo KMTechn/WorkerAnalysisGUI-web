@@ -40,7 +40,7 @@ from tkcalendar import DateEntry
 
 REPO_OWNER = "KMTechn"
 REPO_NAME = "WorkerAnalysisGUI"
-CURRENT_VERSION = "v1.0.5" # 버전 업데이트
+CURRENT_VERSION = "v1.0.6" # 버전 업데이트
 
 def check_for_updates():
     try:
@@ -203,38 +203,60 @@ class DataAnalyzer:
                 with open(target_time_path, 'r', encoding=encoding) as f:
                     reader = csv.DictReader(f)
                     return {str(row['Item Code']): float(row['TargetSec'])
-                                    for row in reader
-                                    if row.get('Item Code') and row.get('TargetSec') and row['TargetSec'].replace('.', '').isdigit()}
+                                     for row in reader
+                                     if row.get('Item Code') and row.get('TargetSec') and row['TargetSec'].replace('.', '').isdigit()}
             except Exception:
                 continue
         messagebox.showwarning("TargetTime.csv 로드 오류", "목표 시간 파일을 읽는 데 실패했습니다.")
         return {}
 
+    # ### START: MODIFIED METHOD ###
     def load_all_data(self, folder_path: str, process_mode: str, date_filter: Optional[datetime.date] = None) -> pd.DataFrame:
+        """
+        로그 파일을 로드하는 메서드.
+        - date_filter (실시간 모드): `folder_path` (C:\Sync)에서 오늘/어제 로그만 로드.
+        - full-load 모드: `folder_path` (C:\Sync)와 `folder_path\log` 하위 모든 폴더를 재귀적으로 검색하여 모든 로그를 로드.
+        """
         all_event_data_dfs, target_files = [], []
-        all_log_files = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
         
         if date_filter:
+            # 실시간 로딩: C:\Sync 폴더만 검색하여 오늘/어제 파일 필터링
+            all_log_files = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
+            
             date_str_today = date_filter.strftime('%Y%m%d')
             yesterday = date_filter - datetime.timedelta(days=1)
             date_str_yesterday = yesterday.strftime('%Y%m%d')
             
             all_log_files = [
-                f for f in all_log_files 
+                f for f in all_log_files
                 if f"_{date_str_today}.csv" in os.path.basename(f) or f"_{date_str_yesterday}.csv" in os.path.basename(f)
             ]
-            print(f"실시간 로딩: {len(all_log_files)}개 파일만 읽습니다. (필터: {process_mode})")
+            print(f"실시간 로딩: {len(all_log_files)}개 파일만 읽습니다. (경로: {folder_path})")
+        else:
+            # 전체 분석 로딩: C:\Sync 폴더와 C:\Sync\log 하위 모든 폴더 검색
+            print(f"전체 데이터 로딩: '{folder_path}' 및 '{os.path.join(folder_path, 'log')}' 하위 폴더를 모두 검색합니다.")
+            main_folder_logs = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
+            
+            log_archive_path = os.path.join(folder_path, 'log')
+            archived_logs = []
+            if os.path.isdir(log_archive_path):
+                # 'recursive=True'를 사용하여 모든 하위 디렉토리 탐색
+                archived_logs = glob.glob(os.path.join(log_archive_path, '**', '*작업이벤트로그*.csv'), recursive=True)
+            
+            all_log_files = main_folder_logs + archived_logs
+            print(f"총 {len(all_log_files)}개의 로그 파일 발견.")
 
+        # 파일명으로 공정 필터링 (더 명확한 기준으로 변경)
         if process_mode == '포장실':
-            target_files = [f for f in all_log_files if '이적' not in os.path.basename(f)]
+            target_files = [f for f in all_log_files if '포장실작업이벤트로그' in os.path.basename(f)]
         elif process_mode == '이적실':
-            target_files = [f for f in all_log_files if '이적' in os.path.basename(f)]
-        else: 
+            target_files = [f for f in all_log_files if '이적작업이벤트로그' in os.path.basename(f)]
+        else: # '전체' 또는 '전체 비교'
             target_files = all_log_files
 
         if not target_files:
             if date_filter: return pd.DataFrame()
-            raise FileNotFoundError(f"지정한 폴더에 '{process_mode}'에 대한 로그 파일이 없습니다.")
+            raise FileNotFoundError(f"지정한 폴더 경로에 '{process_mode}'에 대한 로그 파일이 없습니다.")
 
         for file_path in target_files:
             if os.path.getsize(file_path) == 0: continue
@@ -248,7 +270,10 @@ class DataAnalyzer:
             if df is None or df.empty: continue
 
             try:
-                current_process = "이적실" if '이적' in os.path.basename(file_path) else "포장실"
+                # 파일명으로 현재 공정 결정
+                filename = os.path.basename(file_path)
+                current_process = "이적실" if '이적작업이벤트로그' in filename else "포장실"
+                
                 if process_mode not in ["전체", "전체 비교"] and (
                     (process_mode == "이적실" and current_process != "이적실") or
                     (process_mode == "포장실" and current_process != "포장실")
@@ -257,8 +282,13 @@ class DataAnalyzer:
 
                 if 'worker_name' in df.columns: df.rename(columns={'worker_name': 'worker'}, inplace=True)
                 if 'worker' not in df.columns:
-                    match = re.search(r'이적작업이벤트로그_([^_]+)_\d{8}\.csv', os.path.basename(file_path))
-                    df['worker'] = match.group(1) if match else 'UNKNOWN_WORKER'
+                    # 이적실 로그는 파일명에서 작업자 이름 추출 시도
+                    if current_process == "이적실":
+                        match = re.search(r'이적작업이벤트로그_([^_]+)_\d{8}\.csv', filename)
+                        df['worker'] = match.group(1) if match else 'UNKNOWN_WORKER'
+                    else:
+                        # 포장실 로그는 파일명에 컴퓨터 ID가 있으므로, CSV 내부 데이터에 의존
+                        df['worker'] = 'UNKNOWN_WORKER'
                 
                 df['worker'], df['process'] = df['worker'].astype(str), current_process
                 if not all(h in df.columns for h in ['timestamp', 'event', 'details']): continue
@@ -270,7 +300,7 @@ class DataAnalyzer:
             except Exception as e:
                 print(f"ERROR: Event log file '{file_path}' processing error: {e}")
 
-        if not all_event_data_dfs: 
+        if not all_event_data_dfs:
             self.raw_event_df = pd.DataFrame()
             if date_filter: return pd.DataFrame()
             raise ValueError("로그 파일들을 찾았지만, 데이터를 읽을 수 없습니다.")
@@ -279,6 +309,7 @@ class DataAnalyzer:
         self.raw_event_df = event_df.copy()
         
         return self.process_events_to_sessions(event_df)
+    # ### END: MODIFIED METHOD ###
 
     def process_events_to_sessions(self, event_df: pd.DataFrame) -> pd.DataFrame:
         if event_df.empty: return pd.DataFrame()
@@ -357,7 +388,7 @@ class DataAnalyzer:
                     shipping_mask = (df_filtered['shipping_date'].dt.date >= shipping_start_obj) & (df_filtered['shipping_date'].dt.date <= shipping_end_obj)
                     df_filtered = df_filtered.loc[shipping_mask].copy()
                 except (ValueError, TypeError, AttributeError):
-                     print(f"경고: 유효하지 않은 출고 날짜 필터 값입니다.")
+                    print(f"경고: 유효하지 않은 출고 날짜 필터 값입니다.")
 
         if selected_workers:
             df_filtered = df_filtered[df_filtered['worker'].isin(selected_workers)]
@@ -450,7 +481,7 @@ class DataAnalyzer:
                             (current_week_sessions['is_restored'] == False) &
                             (current_week_sessions['is_test'] == False)
                         ]
-                                            
+                                        
                         if not clean_sessions_for_best_record.empty:
                             best_row = clean_sessions_for_best_record.loc[clean_sessions_for_best_record['work_time'].idxmin()]
                             best_time = best_row['work_time']
@@ -788,9 +819,9 @@ class WorkerAnalysisGUI:
         
         mode = self.process_mode_var.get()
         if mode == "포장실":
-                     self.RADAR_METRICS = self.PACKAGING_RADAR_METRICS
+                         self.RADAR_METRICS = self.PACKAGING_RADAR_METRICS
         else:
-                     self.RADAR_METRICS = self.TRANSFER_RADAR_METRICS
+                         self.RADAR_METRICS = self.TRANSFER_RADAR_METRICS
 
         start_date, end_date = self.start_date_entry.get_date(), self.end_date_entry.get_date()
         selected_workers = [self.worker_listbox.get(i) for i in self.worker_listbox.curselection()]
@@ -1606,7 +1637,7 @@ class WorkerAnalysisGUI:
         top_frame.grid_columnconfigure((0,1,2,3), weight=1)
 
         score_card = self._create_dashboard_card(top_frame, "종합 성과 점수", f"{worker_performance.overall_score:.1f} 점", "⭐",
-                                                value_color=self.COLOR_SUCCESS if worker_performance.overall_score >= 70 else (self.COLOR_DANGER if worker_performance.overall_score < 50 else self.COLOR_TEXT))
+                                               value_color=self.COLOR_SUCCESS if worker_performance.overall_score >= 70 else (self.COLOR_DANGER if worker_performance.overall_score < 50 else self.COLOR_TEXT))
         score_card.grid(row=0, column=0, sticky='nsew', padx=5, rowspan=2)
 
         best_time_text = f"(금주 최고: {self._format_seconds(worker_performance.best_work_time)}"
@@ -2012,7 +2043,7 @@ class WorkerAnalysisGUI:
                 try:
                     sort_value = pd.to_datetime(value_raw, errors='raise')
                 except (ValueError, TypeError):
-                     sort_value = str(value_raw).lower()
+                    sort_value = str(value_raw).lower()
 
             l.append((sort_value, k))
 
@@ -2329,7 +2360,7 @@ class WorkerAnalysisGUI:
                 self.comparison_date_frame.pack_forget()
         else:
             if not self.comparison_date_frame.winfo_ismapped():
-                 self.comparison_date_frame.pack(side=tk.LEFT)
+                self.comparison_date_frame.pack(side=tk.LEFT)
         self._update_comparison_view()
 
     def _update_comparison_view(self):
