@@ -13,20 +13,25 @@
         "item_perf_품목명": 78,
         "item_perf_안정성(초)": 120,
         "data_table_목표_달성률_%": 166,
-        "realtime_item_품목명": 142,
-        "realtime_item_생산량 (PCS)": 243
+        "realtime_item_품목명": 89,
+        "realtime_item_생산량 (PCS)": 243,
+        "error_log_오류 유형": 150,
+        "data_table_날짜": 135,
+        "data_table_작업자": 167
     },
-    "window_geometry": "1920x1129+-9+5",
+    "window_geometry": "2560x1369+-7+7",
     "pane_positions": {
         "main": 307,
         "packaging_prod": 614,
-        "realtime_main": 651,
+        "realtime_main": 1145,
         "overview_bottom": 0,
         "prod_charts": 674,
         "detailed_main": 275,
         "detailed_bottom": 703,
         "detailed_radar": 399,
         "realtime_left_pane": 468,
-        "realtime_packaging_main": 780
+        "realtime_packaging_main": 1099,
+        "realtime_packaging_v_main": 626,
+        "realtime_packaging_h_top": 1101
     }
 }
