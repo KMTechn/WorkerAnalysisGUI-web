@@ -35,7 +35,7 @@ from tkcalendar import DateEntry
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "WorkerAnalysisGUI"
-CURRENT_VERSION = "v1.0.5" # 버전 업데이트
+CURRENT_VERSION = "v1.0.7" # 버전 업데이트
 def check_for_updates():
     try:
         api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
@@ -294,6 +294,9 @@ class DataAnalyzer:
             'pcs_completed': pcs_completed_values
         })
         sessions_df['shipping_date'] = pd.to_datetime(sessions_df['shipping_date'], errors='coerce')
+        
+        sessions_df['item_display'] = sessions_df['item_name'].astype(str) + " (" + sessions_df['item_code'].astype(str) + ")"
+        
         return sessions_df
     def filter_data(self, df: pd.DataFrame, start_date, end_date, selected_workers, shipping_start_date=None, shipping_end_date=None):
         if df.empty: return pd.DataFrame()
@@ -337,10 +340,13 @@ class DataAnalyzer:
         if df.empty: return {}
         grouped = df.groupby('worker')
         if not grouped.groups: return {}
+        
+        reasonable_latency_mean = lambda x: x[x <= 3600].mean()
+        
         agg_dict = {
             'avg_work_time': ('work_time', 'mean'),
             'work_time_std': ('work_time', 'std'),
-            'avg_latency': ('latency', 'mean'),
+            'avg_latency': ('latency', reasonable_latency_mean),
             'avg_idle_time': ('idle_time', 'mean'),
             'total_process_errors': ('process_errors', 'sum'),
             'first_pass_yield': ('had_error', lambda x: 1 - x.sum() / x.count() if x.count() > 0 else 1.0),
@@ -436,7 +442,8 @@ class DataAnalyzer:
                 worker_data[wn].overall_score = float(row['overall_score'])
         return worker_data, df
     def _calculate_kpis(self, filtered_df):
-        if filtered_df.empty: return {'total_trays':0, 'total_pcs_completed':0, 'avg_pcs_per_tray':0.0, 'avg_tray_time':0.0, 'total_errors':0, 'avg_fpy':0.0, 'avg_latency':0.0}
+        if filtered_df.empty: return {'total_trays':0, 'total_pcs_completed':0, 'avg_pcs_per_tray':0.0, 'avg_tray_time':0.0, 'total_errors':0, 'weekly_avg_errors':0.0, 'avg_fpy':0.0, 'avg_latency':0.0}
+        
         total_sessions, total_pcs = len(filtered_df), int(filtered_df['pcs_completed'].sum())
         fpy_base = filtered_df[
             (filtered_df['is_test'] == False) &
@@ -444,13 +451,23 @@ class DataAnalyzer:
             (filtered_df['is_restored'] == False)
         ]
         fpy_value = (1 - fpy_base['had_error'].mean()) if not fpy_base.empty else 1.0
+        
+        reasonable_latency = filtered_df[filtered_df['latency'] <= 3600]['latency']
+        avg_latency_value = reasonable_latency.mean() if not reasonable_latency.empty else 0.0
+
+        total_errors = int(filtered_df['process_errors'].sum())
+        num_days = (pd.to_datetime(filtered_df['date']).max() - pd.to_datetime(filtered_df['date']).min()).days + 1
+        num_weeks = num_days / 7 if num_days >= 7 else 1
+        weekly_avg_errors = total_errors / num_weeks
+
         return {
             'total_trays': total_sessions, 'total_pcs_completed': total_pcs,
             'avg_pcs_per_tray': total_pcs/total_sessions if total_sessions>0 else 0.0,
             'avg_tray_time': filtered_df['work_time'].mean(),
-            'total_errors': int(filtered_df['process_errors'].sum()),
+            'total_errors': total_errors,
+            'weekly_avg_errors': weekly_avg_errors,
             'avg_fpy': fpy_value,
-            'avg_latency': filtered_df['latency'].mean()
+            'avg_latency': avg_latency_value
         }
 class WorkerAnalysisGUI:
     DEFAULT_FONT = 'Malgun Gothic'
@@ -616,9 +633,11 @@ class WorkerAnalysisGUI:
         content=ttk.Frame(self.main_pane); self.main_pane.add(content,weight=1)
         def set_sash_position():
             self.root.update_idletasks()
-            pos = self.pane_positions.get('main', max(350, self.main_pane.winfo_width() // 4))
-            if self.main_pane.winfo_width() > 0:
-                self.main_pane.sashpos(0, pos)
+            # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+            if self.main_pane.winfo_exists():
+                pos = self.pane_positions.get('main', max(350, self.main_pane.winfo_width() // 4))
+                if self.main_pane.winfo_width() > 0:
+                    self.main_pane.sashpos(0, pos)
         self.root.after(50, set_sash_position)
         sidebar.bind("<Configure>", self._on_sidebar_resize)
         self.content_area = ttk.Frame(content, style='TFrame', padding=(10, 5))
@@ -865,7 +884,8 @@ class WorkerAnalysisGUI:
         main_v_pane.add(kpi_frame, weight=1)
         charts_frame = ttk.Frame(main_v_pane, style='TFrame')
         main_v_pane.add(charts_frame, weight=1)
-        self.root.after(50, lambda: main_v_pane.sashpos(0, self.pane_positions.get('comparison_v_pane', parent.winfo_height() // 2)))
+        # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+        self.root.after(50, lambda p=main_v_pane, n='comparison_v_pane': p.sashpos(0, self.pane_positions.get(n, parent.winfo_height() // 2)) if p.winfo_exists() else None)
 
         ttk.Label(kpi_frame, text="이적-포장 공정 비교 (이적 완료 - 포장 완료 = 포장 대기)", style='Header.TLabel').pack(anchor='w', pady=(0, 20))
         transfer_df = self.filtered_df_raw[self.filtered_df_raw['process'] == '이적실'].copy()
@@ -900,9 +920,7 @@ class WorkerAnalysisGUI:
         vsb.pack(side='right', fill='y')
         tree.pack(side='left', fill='both', expand=True)
         tree.bind('<Configure>', lambda e, t=tree, name='comparison_table': self._on_column_resize(e, t, name))
-        # ### START: 개선사항 - 더블클릭 이벤트 바인딩 ###
         tree.bind('<Double-1>', self._on_comparison_standby_double_click)
-        # ### END: 개선사항 - 더블클릭 이벤트 바인딩 ###
 
         charts_h_pane = ttk.PanedWindow(charts_frame, orient=tk.HORIZONTAL)
         charts_h_pane.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
@@ -919,24 +937,20 @@ class WorkerAnalysisGUI:
         if not packaging_df_copy.empty:
             packaging_df_copy['date_dt'] = pd.to_datetime(packaging_df_copy['date'])
         self._draw_daily_production_chart(packaging_chart_frame, packaging_df_copy, "포장실 생산량 추이", "D")
-        self.root.after(50, lambda p=charts_h_pane, n='comparison_h_pane': p.sashpos(0, self.pane_positions.get(n, parent.winfo_width() // 2)))
+        # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+        self.root.after(50, lambda p=charts_h_pane, n='comparison_h_pane': p.sashpos(0, self.pane_positions.get(n, parent.winfo_width() // 2)) if p.winfo_exists() else None)
 
-    # ### START: 개선사항 - '포장 대기' 상세 팝업 함수 ###
     def _on_comparison_standby_double_click(self, event):
         """'전체 비교' 탭의 테이블에서 '포장 대기' 항목을 더블클릭했을 때 호출됩니다."""
         tree = event.widget
         selected_item_id = tree.focus()
         if not selected_item_id:
             return
-
         item = tree.item(selected_item_id)
         metric_name = item['values'][0]
-
-        # 수량을 나타내는 행 (세트, 수량)에서만 동작하도록 함
         if '세트' not in metric_name and '수량' not in metric_name:
             return
 
-        # 1. 이적/포장 데이터 분리
         transfer_df = self.filtered_df_raw[self.filtered_df_raw['process'] == '이적실'].copy()
         packaging_df = self.filtered_df_raw[self.filtered_df_raw['process'] == '포장실'].copy()
 
@@ -944,14 +958,11 @@ class WorkerAnalysisGUI:
             messagebox.showinfo("정보", "대기 품목을 계산할 이적 데이터가 없습니다.")
             return
 
-        # 2. 품목별로 PCS 합계 계산
         transfer_summary = transfer_df.groupby(['item_code', 'item_name'])['pcs_completed'].sum().reset_index()
         transfer_summary.rename(columns={'pcs_completed': 'transfer_pcs'}, inplace=True)
-
         packaging_summary = packaging_df.groupby(['item_code', 'item_name'])['pcs_completed'].sum().reset_index()
         packaging_summary.rename(columns={'pcs_completed': 'packaging_pcs'}, inplace=True)
 
-        # 3. 데이터 병합 및 대기 수량 계산
         if packaging_summary.empty:
             standby_df = transfer_summary
             standby_df.rename(columns={'transfer_pcs': 'standby_pcs'}, inplace=True)
@@ -960,19 +971,16 @@ class WorkerAnalysisGUI:
             merged_df['packaging_pcs'] = merged_df['packaging_pcs'].fillna(0)
             merged_df['standby_pcs'] = merged_df['transfer_pcs'] - merged_df['packaging_pcs']
             standby_df = merged_df[merged_df['standby_pcs'] > 0].copy()
-
         if standby_df.empty:
             messagebox.showinfo("정보", "현재 포장 대기 중인 품목이 없습니다.")
             return
 
-        # 4. 상세 내역을 보여줄 새 창(Toplevel) 생성
         win = tk.Toplevel(self.root)
         win.title("포장 대기 품목 목록")
         win.geometry("600x400")
-        win.transient(self.root) # 부모 창 위에 표시
-        win.grab_set()           # 자식 창에 포커스 고정
+        win.transient(self.root)
+        win.grab_set()
 
-        # 5. 상세 Treeview 생성 및 채우기
         detail_tree_frame = ttk.Frame(win)
         detail_tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -994,7 +1002,6 @@ class WorkerAnalysisGUI:
         for i, row in standby_df.iterrows():
             qty = int(row['standby_pcs'])
             detail_tree.insert('', 'end', values=[row['item_code'], row['item_name'], f"{qty:,}"], tags=("oddrow" if i % 2 else "",))
-    # ### END: 개선사항 - '포장 대기' 상세 팝업 함수 ###
 
     def _draw_shipping_date_view(self, parent):
         self._clear_tab(parent)
@@ -1010,7 +1017,7 @@ class WorkerAnalysisGUI:
         if df.empty:
             ttk.Label(parent, text="최근 7일 내 출고 데이터가 없습니다.", font=(self.DEFAULT_FONT, 12), justify='center', foreground=self.COLOR_TEXT_SUBTLE, style="Sidebar.TLabel").pack(expand=True)
             return
-        pivot = df.pivot_table(index='item_name', columns='shipping_date_str', values='pcs_completed', aggfunc='sum', fill_value=0)
+        pivot = df.pivot_table(index='item_display', columns='shipping_date_str', values='pcs_completed', aggfunc='sum', fill_value=0)
         pivot = pivot[unique_dates]
         pivot['총 PCS'] = pivot.sum(axis=1)
         pivot['총 Pallets'] = pivot['총 PCS'] / 60.0
@@ -1020,18 +1027,18 @@ class WorkerAnalysisGUI:
         tree_container = ttk.Frame(parent)
         tree_container.pack(fill=tk.BOTH, expand=True)
         tree = ttk.Treeview(tree_container)
-        cols_config = {'품목명': {'text': '품목명', 'anchor': 'w'}}
+        cols_config = {'품목': {'text': '품목', 'anchor': 'w'}}
         for date_col in unique_dates:
             cols_config[date_col] = {'text': date_col, 'anchor': 'e'}
         cols_config.update({
             '총 PCS': {'text': '총 PCS', 'anchor': 'e'},
             '총 Pallets': {'text': '총 Pallets', 'anchor': 'e'}
         })
-        self._setup_treeview_columns(tree, cols_config, 'shipping_date_view', stretch_col='품목명')
-        for i, (item_name, row) in enumerate(pivot.iterrows()):
-            values = [item_name] + [f"{int(row.get(date, 0)):,}" for date in unique_dates] + [f"{int(row['총 PCS']):,}", f"{row['총 Pallets']:.1f}"]
+        self._setup_treeview_columns(tree, cols_config, 'shipping_date_view', stretch_col='품목')
+        for i, (item_display, row) in enumerate(pivot.iterrows()):
+            values = [item_display] + [f"{int(row.get(date, 0)):,}" for date in unique_dates] + [f"{int(row['총 PCS']):,}", f"{row['총 Pallets']:.1f}"]
             tags = ("oddrow" if i % 2 else "",)
-            if item_name == '총계':
+            if item_display == '총계':
                 tags = ('Total.Treeview',)
             tree.insert('', 'end', values=values, tags=tags)
         vsb = ttk.Scrollbar(tree_container, orient="vertical", command=tree.yview)
@@ -1146,7 +1153,8 @@ class WorkerAnalysisGUI:
         main_pane.add(table_frame, weight=1)
         self._draw_item_summary_table(table_frame, df_to_display)
         self.root.update_idletasks()
-        main_pane.after(10, lambda p=main_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 2, 100))))
+        # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+        main_pane.after(10, lambda p=main_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 2, 100))) if p.winfo_exists() else None)
     def _create_dashboard_card(self, parent, title, value, icon, value_color=None, best_record_text=None):
         card=ttk.Frame(parent,style='Card.TFrame',padding=20)
         header_frame = ttk.Frame(card, style='Card.TFrame')
@@ -1247,7 +1255,7 @@ class WorkerAnalysisGUI:
         if df.empty:
             ttk.Label(table_card, text="집계할 데이터가 없습니다.", style="Sidebar.TLabel").pack(expand=True)
             return
-        item_summary = df.groupby(['item_name', 'item_code'])['pcs_completed'].sum().reset_index()
+        item_summary = df.groupby('item_display')['pcs_completed'].sum().reset_index()
         item_summary = item_summary.sort_values(by='pcs_completed', ascending=False)
         item_summary = item_summary[item_summary['pcs_completed'] > 0]
         item_summary['pallets_completed'] = item_summary['pcs_completed'] / 60
@@ -1255,16 +1263,15 @@ class WorkerAnalysisGUI:
         tree_container.pack(fill=tk.BOTH, expand=True)
         tree = ttk.Treeview(tree_container)
         columns_config = {
-            '품목명': {'anchor': 'w'},
-            '품목코드': {'anchor': 'w'},
+            '품목': {'anchor': 'w'},
             '총 생산량 (PCS)': {'anchor': 'e'},
             '총 생산량 (Pallets)': {'anchor': 'e'},
         }
-        self._setup_treeview_columns(tree, columns_config, 'pkg_item_summary', stretch_col='품목명')
+        self._setup_treeview_columns(tree, columns_config, 'pkg_item_summary', stretch_col='품목')
         for i, row in item_summary.iterrows():
             pcs_val = f"{int(row['pcs_completed']):,}"
             pallets_val = f"{row['pallets_completed']:.1f}"
-            tree.insert('', 'end', values=[row['item_name'], row['item_code'], pcs_val, pallets_val], tags=("oddrow" if i % 2 == 0 else "",))
+            tree.insert('', 'end', values=[row['item_display'], pcs_val, pallets_val], tags=("oddrow" if i % 2 == 0 else "",))
         vsb = ttk.Scrollbar(tree_container, orient="vertical", command=tree.yview)
         hsb = ttk.Scrollbar(tree_container, orient="horizontal", command=tree.xview)
         tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -1281,10 +1288,10 @@ class WorkerAnalysisGUI:
         kpi_frame.grid_columnconfigure((0,1,2),weight=1)
         avg_tray_time = self._format_seconds(self.kpis.get('avg_tray_time',0))
         avg_latency = self._format_seconds(self.kpis.get('avg_latency',0))
-        total_errors = self.kpis.get('total_errors',0)
+        weekly_avg_errors = self.kpis.get('weekly_avg_errors',0)
         self._create_dashboard_card(kpi_frame,"평균 트레이 작업시간",avg_tray_time,"⏱️").grid(row=0,column=0,sticky='nsew',padx=5)
         self._create_dashboard_card(kpi_frame,"평균 작업 준비시간",avg_latency,"⏯️").grid(row=0,column=1,sticky='nsew',padx=5)
-        self._create_dashboard_card(kpi_frame,"총 공정 오류",f"{total_errors:,}건","❌",value_color=self.COLOR_DANGER if total_errors>0 else self.COLOR_SUCCESS).grid(row=0,column=2,sticky='nsew',padx=5)
+        self._create_dashboard_card(kpi_frame,"주간 평균 공정 오류",f"{weekly_avg_errors:.1f}건","❌",value_color=self.COLOR_DANGER if weekly_avg_errors > 0.5 else self.COLOR_SUCCESS).grid(row=0,column=2,sticky='nsew',padx=5)
         control_frame = ttk.Frame(parent_tab, style='TFrame')
         control_frame.pack(fill=tk.X, padx=0, pady=(0, 5))
         ttk.Label(control_frame, text="집계 단위:").pack(side=tk.LEFT, padx=(0, 10))
@@ -1331,10 +1338,11 @@ class WorkerAnalysisGUI:
         scatter_frame=ttk.Frame(top_pane,style='Card.TFrame',padding=20); top_pane.add(scatter_frame,weight=1)
         self._draw_speed_accuracy_scatter(scatter_frame)
         self.root.update_idletasks()
-        top_pane.after(10, lambda p=top_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 2, 100))))
+        # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+        top_pane.after(10, lambda p=top_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 2, 100))) if p.winfo_exists() else None)
     def _draw_item_production_table(self, parent, df, period):
         self._clear_tab(parent)
-        production_pivot = df.pivot_table(index='item_name', columns='period_group', values='pcs_completed', aggfunc='sum', fill_value=0)
+        production_pivot = df.pivot_table(index='item_display', columns='period_group', values='pcs_completed', aggfunc='sum', fill_value=0)
         if production_pivot.empty:
             ttk.Label(parent, text="집계할 생산 데이터가 없습니다.", style='TLabel').pack(expand=True)
             return
@@ -1357,22 +1365,22 @@ class WorkerAnalysisGUI:
             else: # 일간
                 dynamic_date_cols_display.append(d.strftime('%m-%d'))
         tree = ttk.Treeview(tree_container)
-        columns_config = {'모델명': {'anchor': 'w'}}
+        columns_config = {'품목': {'anchor': 'w'}}
         for col_name in dynamic_date_cols_display:
             columns_config[col_name] = {'anchor': 'e'}
         columns_config.update({
             '합계 (PCS)': {'anchor': 'e'},
             '합계 (Pallets)': {'anchor': 'e'}
         })
-        self._setup_treeview_columns(tree, columns_config, 'prod_pivot', stretch_col='모델명')
+        self._setup_treeview_columns(tree, columns_config, 'prod_pivot', stretch_col='품목')
         tree.tag_configure('total_row', font=(self.DEFAULT_FONT, int(11*self.scale_factor), "bold"))
-        for item_name, row in production_pivot.iterrows():
-            values_for_tree = [item_name]
+        for item_display, row in production_pivot.iterrows():
+            values_for_tree = [item_display]
             for d_col_dt in date_cols:
                 values_for_tree.append(f"{int(row.get(d_col_dt, 0)):,}")
             values_for_tree.append(f"{int(row.get('합계 (PCS)', 0)):,}")
             values_for_tree.append(f"{row.get('합계 (Pallets)', 0):.1f}")
-            tags = ('total_row',) if item_name == '합계' else ()
+            tags = ('total_row',) if item_display == '합계' else ()
             tree.insert('', 'end', values=values_for_tree, tags=tags)
         vsb = ttk.Scrollbar(tree_container, orient="vertical", command=tree.yview)
         hsb = ttk.Scrollbar(tree_container, orient="horizontal", command=tree.xview)
@@ -1409,8 +1417,8 @@ class WorkerAnalysisGUI:
         self.detailed_view_frame = ttk.Frame(main_pane, style='TFrame')
         main_pane.add(self.detailed_view_frame, weight=1)
         self._update_worker_list_and_view()
-        self.root.update_idletasks()
-        main_pane.after(10, lambda p=main_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(200, p.winfo_width() // 6))))
+        # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+        self.root.after(10, lambda p=main_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(200, p.winfo_width() // 6))) if p.winfo_exists() else None)
     def _update_worker_list_and_view(self, event=None):
         if not hasattr(self, 'detailed_worker_listbox') or not self.detailed_worker_listbox.winfo_exists(): return
         if not self.worker_data: return
@@ -1488,9 +1496,11 @@ class WorkerAnalysisGUI:
         bottom_pane.add(item_analysis_frame, weight=1)
         self._draw_item_performance_table(item_analysis_frame, worker_name)
         self.root.update_idletasks()
-        bottom_pane.after(10, lambda p=bottom_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 3, 100))))
+        # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+        bottom_pane.after(10, lambda p=bottom_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 3, 100))) if p.winfo_exists() else None)
         self.root.update_idletasks()
-        radar_pane.after(10, lambda p=radar_pane, n=radar_pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_height() * 2 // 3, 100))))
+        # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+        radar_pane.after(10, lambda p=radar_pane, n=radar_pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_height() * 2 // 3, 100))) if p.winfo_exists() else None)
     def _draw_radar_chart(self, parent, worker_name):
         ttk.Label(parent, text=f"'{worker_name}'의 성과 레이더 차트", style='Header.TLabel').pack(anchor='w', pady=(0, 10))
         worker_norm_data = self.normalized_df[self.normalized_df['worker'] == worker_name].iloc[0] if self.normalized_df is not None and not self.normalized_df.empty and worker_name in self.normalized_df['worker'].values else None
@@ -1550,7 +1560,7 @@ class WorkerAnalysisGUI:
         if worker_filtered_df.empty:
             ttk.Label(parent, text="이 작업자의 품목별 데이터가 없습니다.", style="Sidebar.TLabel").pack(expand=True)
             return
-        item_summary = worker_filtered_df.groupby('item_name').agg(
+        item_summary = worker_filtered_df.groupby('item_display').agg(
             avg_work_time=('work_time', 'mean'),
             work_time_std=('work_time', 'std'),
             total_pcs=('pcs_completed', 'sum'),
@@ -1561,17 +1571,17 @@ class WorkerAnalysisGUI:
         tree_container.pack(fill=tk.BOTH, expand=True)
         tree = ttk.Treeview(tree_container)
         columns_config = {
-            '품목명': {'anchor': 'w'},
+            '품목': {'anchor': 'w'},
             '평균시간': {'anchor': 'e'},
             '안정성(초)': {'anchor': 'e'},
             '총 PCS': {'anchor': 'e'},
             '총 Pallets': {'anchor': 'e'},
             '목표달성률': {'anchor': 'e'},
         }
-        self._setup_treeview_columns(tree, columns_config, 'item_perf', stretch_col='품목명')
+        self._setup_treeview_columns(tree, columns_config, 'item_perf', stretch_col='품목')
         for i, row in item_summary.iterrows():
             values = [
-                row['item_name'], f"{row['avg_work_time']:.1f}", f"{row['work_time_std']:.1f}",
+                row['item_display'], f"{row['avg_work_time']:.1f}", f"{row['work_time_std']:.1f}",
                 f"{int(row['total_pcs']):,}", f"{row['total_pallets']:.1f}", f"{row['avg_target_achievement']:.1f}%"
             ]
             tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 == 0 else "",))
@@ -1623,8 +1633,8 @@ class WorkerAnalysisGUI:
         self.detail_filter_process = ttk.Combobox(filter_frame, values=processes, state='readonly', width=10)
         self.detail_filter_process.set("전체")
         self.detail_filter_process.grid(row=1, column=3, padx=(0,15), pady=5, sticky='w')
-        ttk.Label(filter_frame, text="품목명:", style="Sidebar.TLabel").grid(row=1, column=4, padx=(5,2), pady=5, sticky='w')
-        items = ["전체"] + sorted(self.filtered_df_raw['item_name'].unique())
+        ttk.Label(filter_frame, text="품목:", style="Sidebar.TLabel").grid(row=1, column=4, padx=(5,2), pady=5, sticky='w')
+        items = ["전체"] + sorted(self.filtered_df_raw['item_display'].unique())
         self.detail_filter_item = ttk.Combobox(filter_frame, values=items, state='readonly', width=25)
         self.detail_filter_item.set("전체")
         self.detail_filter_item.grid(row=1, column=5, padx=(0,15), pady=5, sticky='w', columnspan=3)
@@ -1664,7 +1674,7 @@ class WorkerAnalysisGUI:
             df = df[df['process'] == process]
         item = self.detail_filter_item.get()
         if item != "전체":
-            df = df[df['item_name'] == item]
+            df = df[df['item_display'] == item]
         df = df.drop(columns=['date_only'], errors='ignore')
         self._repopulate_data_table(df)
     def _reset_detail_filters(self):
@@ -1704,20 +1714,20 @@ class WorkerAnalysisGUI:
         else:
             df_display['목표 달성률 (%)'] = "N/A"
         cols_to_display = [
-            '날짜', '시작 시간', 'worker', 'process', 'item_name', 'item_code',
+            '날짜', '시작 시간', 'worker', 'process', 'item_display',
             '작업시간 (초)', '준비시간 (초)', '완료 PCS', '완료 Pallets', '목표 달성률 (%)', '오류수', '오류 발생 여부'
         ]
         if 'shipping_date' in df_display.columns:
             cols_to_display.insert(2, '출고 날짜')
         header_map = {
-            'worker': '작업자', 'process': '공정', 'item_name': '품목명', 'item_code': '품목코드'
+            'worker': '작업자', 'process': '공정', 'item_display': '품목'
         }
         self.currently_displayed_table_df = df_display[cols_to_display].rename(columns=header_map)
         columns_config = {}
         for col_name in self.currently_displayed_table_df.columns:
-            anchor = 'w' if any(txt in col_name for txt in ['명', '코드', '날짜', '시간']) else 'center'
+            anchor = 'w' if any(txt in col_name for txt in ['품목', '날짜', '시간']) else 'center'
             columns_config[col_name] = {'anchor': anchor}
-        self._setup_treeview_columns(self.data_tree, columns_config, 'data_table', stretch_col='품목명')
+        self._setup_treeview_columns(self.data_tree, columns_config, 'data_table', stretch_col='품목')
         for i, row in self.currently_displayed_table_df.iterrows():
             values = list(row)
             self.data_tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 else "",))
@@ -1827,8 +1837,9 @@ class WorkerAnalysisGUI:
             self._draw_realtime_hourly_production_chart(hourly_chart_frame, pd.DataFrame(), "이적실 시간별 생산량 (오늘 vs 평균)", pd.DataFrame())
             self._draw_realtime_item_status(item_frame, pd.DataFrame())
             self.root.update_idletasks()
-            main_pane.after(10, lambda p=main_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 2, 100))))
-            left_pane.after(10, lambda p=left_pane, n=left_pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_height() // 2, 100))))
+            # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+            main_pane.after(10, lambda p=main_pane, n=pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_width() // 2, 100))) if p.winfo_exists() else None)
+            left_pane.after(10, lambda p=left_pane, n=left_pane_name: p.sashpos(0, self.pane_positions.get(n, max(p.winfo_height() // 2, 100))) if p.winfo_exists() else None)
         else: # mode == "포장실"
             pane_name_v = "realtime_packaging_v_main"
             main_v_pane = ttk.PanedWindow(parent_tab, orient=tk.VERTICAL)
@@ -1855,9 +1866,9 @@ class WorkerAnalysisGUI:
             main_v_pane.add(bottom_frame, weight=1)
             
             self._draw_shipping_date_view(bottom_frame)
-            
-            self.root.after(50, lambda p=main_v_pane, n=pane_name_v: p.sashpos(0, self.pane_positions.get(n, parent_tab.winfo_height() // 2)))
-            self.root.after(50, lambda p=top_h_pane, n=pane_name_h: p.sashpos(0, self.pane_positions.get(n, top_frame.winfo_width() // 2)))
+            # ### FIX: TclError 방지를 위해 위젯 존재 여부 확인 ###
+            self.root.after(50, lambda p=main_v_pane, n=pane_name_v: p.sashpos(0, self.pane_positions.get(n, parent_tab.winfo_height() // 2)) if p.winfo_exists() else None)
+            self.root.after(50, lambda p=top_h_pane, n=pane_name_h: p.sashpos(0, self.pane_positions.get(n, top_frame.winfo_width() // 2)) if p.winfo_exists() else None)
         
         self.root.after(200, self._on_realtime_data_refresh)
         
@@ -2009,12 +2020,12 @@ class WorkerAnalysisGUI:
         worker_df['작업시간 (초)'] = worker_df['work_time'].round(1)
         worker_df['완료 PCS'] = worker_df['pcs_completed'].astype(int)
         worker_df['오류 발생'] = worker_df['had_error'].apply(lambda x: '예' if x==1 else '아니오')
-        display_cols = ['시작 시간', 'item_name', '작업시간 (초)', '완료 PCS', '오류 발생']
-        header_map = {'item_name': '품목명'}
+        display_cols = ['시작 시간', 'item_display', '작업시간 (초)', '완료 PCS', '오류 발생']
+        header_map = {'item_display': '품목'}
         display_df = worker_df[display_cols].rename(columns=header_map)
         detail_tree = ttk.Treeview(win, columns=list(display_df.columns), show='headings')
         for col in display_df.columns:
-            anchor = 'w' if '품목명' in col else 'center'
+            anchor = 'w' if '품목' in col else 'center'
             detail_tree.heading(col, text=col, anchor='center')
             detail_tree.column(col, anchor=anchor, width=120)
         for i, row in display_df.iterrows():
@@ -2029,7 +2040,7 @@ class WorkerAnalysisGUI:
         if df.empty:
             ttk.Label(parent, text="금일 작업 데이터가 없습니다.", style="Sidebar.TLabel").pack(expand=True)
             return
-        item_summary = df.groupby('item_name')['pcs_completed'].sum().reset_index()
+        item_summary = df.groupby('item_display')['pcs_completed'].sum().reset_index()
         item_summary = item_summary.sort_values(by='pcs_completed', ascending=False)
         item_summary = item_summary[item_summary['pcs_completed'] > 0]
         item_summary['pallets_completed'] = item_summary['pcs_completed'] / 60
@@ -2037,15 +2048,15 @@ class WorkerAnalysisGUI:
         tree_container.pack(fill=tk.BOTH, expand=True)
         tree = ttk.Treeview(tree_container)
         columns_config = {
-            '품목명': {'anchor': 'w'},
+            '품목': {'anchor': 'w'},
             '생산량 (PCS)': {'anchor': 'e'},
             '생산량 (Pallets)': {'anchor': 'e'},
         }
-        self._setup_treeview_columns(tree, columns_config, 'realtime_item', stretch_col='품목명')
+        self._setup_treeview_columns(tree, columns_config, 'realtime_item', stretch_col='품목')
         for i, row in item_summary.iterrows():
             pcs_val = f"{int(row['pcs_completed']):,}"
             pallets_val = f"{row['pallets_completed']:.1f}"
-            tree.insert('', 'end', values=[row['item_name'], pcs_val, pallets_val], tags=("oddrow" if i % 2 == 0 else "",))
+            tree.insert('', 'end', values=[row['item_display'], pcs_val, pallets_val], tags=("oddrow" if i % 2 == 0 else "",))
         if not item_summary.empty:
             total_pcs = item_summary['pcs_completed'].sum()
             total_pallets = item_summary['pallets_completed'].sum()
