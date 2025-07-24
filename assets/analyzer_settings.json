@@ -1,5 +1,5 @@
 {
-    "scale_factor": 1.3999999999999995,
+    "scale_factor": 1.2999999999999994,
     "column_widths": {
         "realtime_item_#1": 156,
         "realtime_worker_#1": 275,
@@ -23,7 +23,7 @@
     "pane_positions": {
         "main": 307,
         "packaging_prod": 614,
-        "realtime_main": 983,
+        "realtime_main": 925,
         "overview_bottom": 0,
         "prod_charts": 674,
         "detailed_main": 275,
@@ -33,7 +33,7 @@
         "realtime_packaging_main": 1099,
         "realtime_packaging_v_main": 626,
         "realtime_packaging_h_top": 622,
-        "comparison_v_pane": 533,
+        "comparison_v_pane": 435,
         "comparison_h_pane": 1105
     }
 }

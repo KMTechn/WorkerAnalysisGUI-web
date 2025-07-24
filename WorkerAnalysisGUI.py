@@ -32,11 +32,41 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from tkcalendar import DateEntry
 
 # ####################################################################
+# # 헬퍼 클래스: 툴팁
+# ####################################################################
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+
+    def show_tooltip(self, event):
+        x, y, _, _ = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+
+        self.tooltip_window = tk.Toplevel(self.widget)
+        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_geometry(f"+{x}+{y}")
+        
+        label = tk.Label(self.tooltip_window, text=self.text, justify='left',
+                         background="#ffffe0", relief='solid', borderwidth=1,
+                         font=("Malgun Gothic", 10, "normal"))
+        label.pack(ipadx=1)
+
+    def hide_tooltip(self, event):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+        self.tooltip_window = None
+
+# ####################################################################
 # # 자동 업데이트 기능 (Auto-Updater)
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "WorkerAnalysisGUI"
-CURRENT_VERSION = "v1.1.0" # 버전 업데이트
+CURRENT_VERSION = "v1.1.1" # 버전 업데이트
 
 def check_for_updates():
     try:
@@ -513,11 +543,11 @@ class DataAnalyzer:
             norm_cols_for_score.append(norm_col_name)
             weights.append(weight)
 
-        # 검사실의 불량 탐지율은 높을수록 좋으므로 별도 정규화
+        # 검사실의 불량 탐지율은 높을수록 좋으므로 별도 정규화 (Scatter Plot용)
         if 'defect_rate' in df.columns:
             s = df['defect_rate']
             min_v, max_v = s.min(), s.max()
-            if max_v == min_v:
+            if max_v == min_v or max_v == 0:
                 df['defect_rate_norm'] = 0.5
             else:
                 df['defect_rate_norm'] = (s - min_v) / (max_v - min_v)
@@ -1093,6 +1123,19 @@ class WorkerAnalysisGUI:
         elif selected_tab_widget == self.data_table_tab_frame:
             self._draw_data_table_tab(self.data_table_tab_frame)
             self._repopulate_data_table(self.filtered_df_raw)
+
+    def _adjust_tree_columns_width(self, event, tree, proportions):
+        frame_width = event.width - 4
+        if frame_width <= 1:
+            return
+
+        total_proportion = sum(proportions.values())
+        
+        for col, proportion in proportions.items():
+            try:
+                tree.column(col, width=int(frame_width * (proportion / total_proportion)))
+            except tk.TclError:
+                pass
 
     def _draw_overall_comparison_tab(self, parent):
         self._clear_tab(parent)
@@ -2160,7 +2203,8 @@ class WorkerAnalysisGUI:
         
         ttk.Button(btn_frame, text="🔍 필터 적용", command=self._apply_detail_filters).pack(fill=tk.X, pady=2)
         ttk.Button(btn_frame, text="🔄 초기화", command=self._reset_detail_filters).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_frame, text="📄 Excel로 내보내기", command=self._export_to_excel).pack(fill=tk.X, pady=(10, 2))
+        ttk.Button(btn_frame, text="📄 Excel로 내보내기", command=self._export_to_excel).pack(fill=tk.X, pady=(5,2))
+        ttk.Button(btn_frame, text="열 선택", command=self._select_display_columns).pack(fill=tk.X, pady=2)
         
         tree_frame = ttk.Frame(parent_tab)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -2172,6 +2216,40 @@ class WorkerAnalysisGUI:
         hsb.pack(side='bottom', fill='x')
         self.data_tree.pack(side='left', fill='both', expand=True)
         self.data_tree.bind('<Configure>', lambda e, t=self.data_tree, name='data_table': self._on_column_resize(e, t, name))
+
+    def _select_display_columns(self):
+        if not hasattr(self, 'data_tree') or not self.data_tree.cget('columns'):
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("표시할 컬럼 선택")
+        win.transient(self.root)
+        win.grab_set()
+
+        all_columns = self.data_tree.cget('columns')
+        
+        current_display = self.data_tree.cget('displaycolumns')
+        if not current_display or current_display == ('#all',):
+             current_display = all_columns
+        
+        vars = {col: tk.BooleanVar(value=(col in current_display)) for col in all_columns}
+
+        for i, col in enumerate(all_columns):
+            chk = ttk.Checkbutton(win, text=col, variable=vars[col])
+            chk.pack(anchor='w', padx=20, pady=2)
+
+        def apply_selection():
+            new_display_cols = [col for col, var in vars.items() if var.get()]
+            if new_display_cols:
+                self.data_tree.config(displaycolumns=new_display_cols)
+            else:
+                messagebox.showwarning("경고", "최소 한 개 이상의 컬럼을 선택해야 합니다.", parent=win)
+            win.destroy()
+
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="적용", command=apply_selection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="취소", command=win.destroy).pack(side=tk.LEFT, padx=5)
 
     def _apply_detail_filters(self):
         df = self.filtered_df_raw.copy()
@@ -2236,16 +2314,26 @@ class WorkerAnalysisGUI:
         df_display['시작 시간'] = df_display['start_time_dt'].dt.strftime('%H:%M:%S').fillna('N/A')
         if 'shipping_date' in df_display.columns:
             df_display['출고 날짜'] = pd.to_datetime(df_display['shipping_date']).dt.strftime('%Y-%m-%d').fillna('')
-        df_display['작업시간 (초)'] = df_display['work_time'].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "N/A")
-        df_display['준비시간 (초)'] = df_display['latency'].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "N/A")
+        df_display['작업시간'] = df_display['work_time'].apply(lambda x: f"{x:.1f}초" if pd.notna(x) else "N/A")
+        df_display['준비시간'] = df_display['latency'].apply(lambda x: f"{x:.1f}초" if pd.notna(x) else "N/A")
         df_display['오류수'] = df_display['process_errors'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
         df_display['오류 발생 여부'] = df_display['had_error'].apply(lambda x: '예' if x == 1 else '아니오')
-        df_display['완료 PCS'] = df_display['pcs_completed'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
-        df_display['완료 Pallets'] = df_display['pcs_completed'].apply(lambda x: f"{x / 60:.1f}" if pd.notna(x) and x > 0 else "N/A")
+        
+        def format_pcs_pallets(row):
+            pcs = row['pcs_completed']
+            process = row['process']
+            if pd.notna(pcs) and pcs > 0:
+                if '포장' in process:
+                    pallets = pcs / 60.0
+                    return f"{int(pcs):,} ({pallets:.1f} PL)"
+                return f"{int(pcs):,}"
+            return "N/A"
+        
+        df_display['수량 (PCS/Pallet)'] = df_display.apply(format_pcs_pallets, axis=1)
         
         cols_to_display = [
             '날짜', '시작 시간', 'worker', 'process', 'item_display',
-            '작업시간 (초)', '준비시간 (초)', '완료 PCS', '완료 Pallets', '오류수', '오류 발생 여부'
+            '작업시간', '준비시간', '수량 (PCS/Pallet)', '오류수', '오류 발생 여부'
         ]
         if 'shipping_date' in df_display.columns:
             cols_to_display.insert(2, '출고 날짜')
@@ -2316,7 +2404,8 @@ class WorkerAnalysisGUI:
             value_raw = tree.set(k, col)
             sort_value: Any = None
             try:
-                cleaned_val = str(value_raw).replace(',', '').replace('%', '').replace('초', '').replace('+', '').replace(' 개', '').strip()
+                cleaned_val_str = re.split(r'[\s(]', str(value_raw))[0]
+                cleaned_val = cleaned_val_str.replace(',', '').replace('%', '').replace('초', '').replace('+', '').replace('개', '').strip()
                 sort_value = float(cleaned_val)
             except (ValueError, TypeError):
                 try:
@@ -2604,9 +2693,12 @@ class WorkerAnalysisGUI:
             tree.insert('', 'end', values=total_values, tags=('Total.Treeview',))
             
         vsb = ttk.Scrollbar(tree_container, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(tree_container, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
         vsb.pack(side='right', fill='y')
-        tree.pack(side='left', fill='both', expand=True)
+        hsb.pack(side='bottom', fill='x')
+        tree.pack(fill='both', expand=True, side='left')
         tree.bind('<Configure>', lambda e, t=tree, name='realtime_item': self._on_column_resize(e, t, name))
 
     def on_closing(self):
