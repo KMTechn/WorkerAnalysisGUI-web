@@ -19,7 +19,7 @@
         "data_table_날짜": 135,
         "data_table_작업자": 167
     },
-    "window_geometry": "2560x1369+-7+7",
+    "window_geometry": "1924x1181+-7+7",
     "pane_positions": {
         "main": 307,
         "packaging_prod": 614,
@@ -32,7 +32,7 @@
         "realtime_left_pane": 468,
         "realtime_packaging_main": 1099,
         "realtime_packaging_v_main": 626,
-        "realtime_packaging_h_top": 1101,
+        "realtime_packaging_h_top": 622,
         "comparison_v_pane": 646,
         "comparison_h_pane": 1111
     }
