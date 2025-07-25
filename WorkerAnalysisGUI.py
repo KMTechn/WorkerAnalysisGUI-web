@@ -66,7 +66,7 @@ class ToolTip:
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "WorkerAnalysisGUI"
-CURRENT_VERSION = "v2.0.0" # 버전 업데이트
+CURRENT_VERSION = "v1.0.7" # 버전 업데이트
 
 def check_for_updates():
     try:
@@ -1303,16 +1303,30 @@ class WorkerAnalysisGUI:
         search_frame = ttk.Frame(parent, style='Card.TFrame', padding=15)
         search_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Label(search_frame, text="작업지시 ID (WID):", style='Sidebar.TLabel').grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        # Session/Batch Search
+        ttk.Label(search_frame, text="작업지시 ID (WID):", style='Sidebar.TLabel').grid(row=0, column=0, padx=5, pady=2, sticky='w')
         self.trace_wid_entry = ttk.Entry(search_frame, width=30)
-        self.trace_wid_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+        self.trace_wid_entry.grid(row=0, column=1, padx=5, pady=2, sticky='ew')
 
-        ttk.Label(search_frame, text="완제품 배치 (FPB):", style='Sidebar.TLabel').grid(row=0, column=2, padx=5, pady=5, sticky='w')
+        ttk.Label(search_frame, text="완제품 배치 (FPB):", style='Sidebar.TLabel').grid(row=0, column=2, padx=5, pady=2, sticky='w')
         self.trace_fpb_entry = ttk.Entry(search_frame, width=30)
-        self.trace_fpb_entry.grid(row=0, column=3, padx=5, pady=5, sticky='ew')
+        self.trace_fpb_entry.grid(row=0, column=3, padx=5, pady=2, sticky='ew')
+
+        # Separator and Individual Barcode Search
+        ttk.Separator(search_frame, orient='horizontal').grid(row=1, column=0, columnspan=4, sticky='ew', pady=8)
+
+        ttk.Label(search_frame, text="개별 제품 바코드:", style='Sidebar.TLabel', font=(self.DEFAULT_FONT, 11, 'bold')).grid(row=2, column=0, padx=5, pady=2, sticky='w')
+        self.trace_barcode_entry = ttk.Entry(search_frame, width=40)
+        self.trace_barcode_entry.grid(row=2, column=1, columnspan=3, padx=5, pady=2, sticky='ew')
+        ToolTip(self.trace_barcode_entry, "개별 제품 바코드를 입력하면, 해당 바코드의 전체 공정 이력을 추적합니다.\n이 검색어 입력 시 위 필터(WID, FPB)는 무시됩니다.")
         
-        search_button = ttk.Button(search_frame, text="🔍 검색", command=self._perform_trace_search)
-        search_button.grid(row=0, column=4, padx=10, pady=5)
+        # Buttons
+        search_button_frame = ttk.Frame(search_frame, style='Sidebar.TFrame')
+        search_button_frame.grid(row=0, column=4, rowspan=3, padx=(20, 5), sticky='ns')
+        
+        ttk.Button(search_button_frame, text="🔍 검색", command=self._perform_trace_search).pack(fill=tk.X, expand=True)
+        ttk.Button(search_button_frame, text="🔄 초기화", command=lambda: self._reset_and_perform_trace_search()).pack(fill=tk.X, expand=True, pady=5)
+        
         search_frame.grid_columnconfigure(1, weight=1)
         search_frame.grid_columnconfigure(3, weight=1)
 
@@ -1328,62 +1342,125 @@ class WorkerAnalysisGUI:
         vsb.pack(side='right', fill='y')
         hsb.pack(side='bottom', fill='x')
         self.trace_tree.pack(side='left', fill='both', expand=True)
+        
+        # 초기 로드 (전체 세션 데이터 표시)
+        self.root.after(100, self._perform_trace_search)
 
-        columns_config = {
-            '공정': {'anchor': 'center'}, '작업자': {'anchor': 'center'},
-            '차수': {'anchor': 'center'}, '작업 시작': {'anchor': 'w'},
-            '작업 종료': {'anchor': 'w'}, '작업 시간': {'anchor': 'e'},
-            '품목': {'anchor': 'w'}, '완료수량': {'anchor': 'e'},
-            '작업지시 ID': {'anchor': 'w'}, '완제품 배치': {'anchor': 'w'}
-        }
-        self._setup_treeview_columns(self.trace_tree, columns_config, 'trace_table', stretch_col='품목')
-        self.trace_tree.bind('<Configure>', lambda e, t=self.trace_tree, name='trace_table': self._on_column_resize(e, t, name))
+    def _reset_and_perform_trace_search(self):
+        self.trace_wid_entry.delete(0, tk.END)
+        self.trace_fpb_entry.delete(0, tk.END)
+        if hasattr(self, 'trace_barcode_entry'):
+            self.trace_barcode_entry.delete(0, tk.END)
+        self._perform_trace_search()
 
     def _perform_trace_search(self):
-        wid_query = self.trace_wid_entry.get().strip()
-        fpb_query = self.trace_fpb_entry.get().strip()
-
-        if not wid_query and not fpb_query:
-            messagebox.showinfo("알림", "작업지시 ID 또는 완제품 배치 번호를 입력해주세요.", parent=self.root)
+        if not hasattr(self, 'trace_tree') or not self.trace_tree.winfo_exists():
             return
 
-        # 전체 데이터에서 검색 (필터링 안된 원본)
-        search_base_df = self.full_df.copy()
-        if search_base_df.empty:
-            messagebox.showwarning("데이터 없음", "분석할 데이터가 로드되지 않았습니다.", parent=self.root)
-            return
-
-        result_df = pd.DataFrame()
-        if wid_query:
-            result_df = search_base_df[search_base_df['work_order_id'].str.contains(wid_query, case=False, na=False)]
-        elif fpb_query:
-            result_df = search_base_df[search_base_df['product_batch'].str.contains(fpb_query, case=False, na=False)]
-
-        # Treeview 초기화
+        # 이전 결과 초기화
         for i in self.trace_tree.get_children():
             self.trace_tree.delete(i)
 
-        if result_df.empty:
-            messagebox.showinfo("검색 결과 없음", "해당 조건에 맞는 작업 이력을 찾을 수 없습니다.", parent=self.root)
-            return
+        wid_query = self.trace_wid_entry.get().strip()
+        fpb_query = self.trace_fpb_entry.get().strip()
+        barcode_query = self.trace_barcode_entry.get().strip()
 
-        # 공정 순서(검사->이적->포장) 및 시간순으로 정렬
-        process_order = ['검사실', '이적실', '포장실']
-        result_df['process'] = pd.Categorical(result_df['process'], categories=process_order, ordered=True)
-        result_df = result_df.sort_values(by=['process', 'start_time_dt'])
+        # --- 시나리오 1: 개별 제품 바코드 검색 ---
+        if barcode_query:
+            raw_df = self.analyzer.raw_event_df
+            if raw_df.empty:
+                messagebox.showwarning("데이터 없음", "추적할 원본 로그 데이터가 없습니다.", parent=self.root)
+                return
 
-        for i, row in result_df.iterrows():
-            values = [
-                row.get('process', ''), row.get('worker', ''),
-                row.get('phase', ''),
-                pd.to_datetime(row.get('start_time_dt')).strftime('%y-%m-%d %H:%M:%S') if pd.notna(row.get('start_time_dt')) else '',
-                pd.to_datetime(row.get('end_time_dt')).strftime('%y-%m-%d %H:%M:%S') if pd.notna(row.get('end_time_dt')) else '',
-                self._format_seconds(row.get('work_time', 0)),
-                row.get('item_display', ''),
-                f"{int(row.get('pcs_completed', 0)):,}",
-                row.get('work_order_id', ''), row.get('product_batch', '')
-            ]
-            self.trace_tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 != 0 else "",))
+            # 'SCAN_OK'와 'DEFECTIVE_SCAN' 이벤트를 필터링하고 details를 파싱
+            scan_events = raw_df[raw_df['event'].isin(['SCAN_OK', 'DEFECTIVE_SCAN'])].copy()
+
+            def _parse_scan_details(detail_str):
+                try:
+                    # details가 이미 dict 형태일 수 있으므로 확인
+                    if isinstance(detail_str, dict):
+                        return detail_str
+                    # 문자열 형태의 JSON 파싱
+                    if isinstance(detail_str, str) and detail_str.strip().startswith('{'):
+                         return json.loads(detail_str)
+                    return {}
+                except (json.JSONDecodeError, TypeError):
+                    return {}
+
+            scan_events['details_dict'] = scan_events['details'].apply(_parse_scan_details)
+            
+            # 입력된 바코드와 일치하는 이벤트 검색
+            result_df = scan_events[scan_events['details_dict'].apply(lambda d: d.get('barcode') == barcode_query if isinstance(d, dict) else False)]
+
+            if result_df.empty:
+                messagebox.showinfo("검색 결과 없음", f"바코드 '{barcode_query}'에 대한 스캔 이력을 찾을 수 없습니다.", parent=self.root)
+                return
+
+            # 바코드 추적용으로 Treeview 컬럼 재설정
+            columns_config = {
+                '스캔 시간': {'anchor': 'w'}, '공정': {'anchor': 'center'},
+                '작업자': {'anchor': 'center'}, '스캔 유형': {'anchor': 'center'},
+                '개별 바코드': {'anchor': 'w'}
+            }
+            self._setup_treeview_columns(self.trace_tree, columns_config, 'barcode_trace_table', stretch_col='개별 바코드')
+            
+            # 시간순으로 정렬 (오래된 순)
+            result_df = result_df.sort_values(by='timestamp', ascending=True)
+            
+            for i, row in result_df.iterrows():
+                scan_time = pd.to_datetime(row['timestamp']).strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
+                event_type = "불량" if row['event'] == 'DEFECTIVE_SCAN' else "정상"
+                values = [scan_time, row.get('process'), row.get('worker'), event_type, barcode_query]
+                # 불량 스캔인 경우 행 색상 변경
+                tags = ("RedRow.Treeview" if event_type == "불량" else ("oddrow" if i % 2 != 0 else ""),)
+                self.trace_tree.insert('', 'end', values=values, tags=tags)
+        
+        # --- 시나리오 2 & 3: 세션 단위 검색 또는 전체 보기 ---
+        else:
+            search_base_df = self.full_df.copy()
+            if search_base_df.empty:
+                if wid_query or fpb_query:
+                    messagebox.showwarning("데이터 없음", "분석할 데이터가 로드되지 않았습니다.", parent=self.root)
+                return
+
+            result_df = search_base_df
+            if wid_query:
+                result_df = result_df[result_df['work_order_id'].str.contains(wid_query, case=False, na=False)]
+            if fpb_query:
+                result_df = result_df[result_df['product_batch'].str.contains(fpb_query, case=False, na=False)]
+
+            if result_df.empty and (wid_query or fpb_query):
+                messagebox.showinfo("검색 결과 없음", "해당 조건에 맞는 작업 이력을 찾을 수 없습니다.", parent=self.root)
+                return
+                
+            # 세션 추적용으로 Treeview 컬럼 설정 (원래 구성)
+            columns_config = {
+                '공정': {'anchor': 'center'}, '작업자': {'anchor': 'center'},
+                '차수': {'anchor': 'center'}, '작업 시작': {'anchor': 'w'},
+                '작업 종료': {'anchor': 'w'}, '작업 시간': {'anchor': 'e'},
+                '품목': {'anchor': 'w'}, '완료수량': {'anchor': 'e'},
+                '작업지시 ID': {'anchor': 'w'}, '완제품 배치': {'anchor': 'w'}
+            }
+            self._setup_treeview_columns(self.trace_tree, columns_config, 'trace_table', stretch_col='품목')
+
+            # 세션 데이터 정렬 및 표시
+            process_order = ['검사실', '이적실', '포장실']
+            result_df['process'] = pd.Categorical(result_df['process'], categories=process_order, ordered=True)
+            result_df = result_df.sort_values(by=['start_time_dt'], ascending=False)
+
+            for i, row in result_df.iterrows():
+                values = [
+                    row.get('process', ''), row.get('worker', ''),
+                    row.get('phase', ''),
+                    pd.to_datetime(row.get('start_time_dt')).strftime('%y-%m-%d %H:%M:%S') if pd.notna(row.get('start_time_dt')) else '',
+                    pd.to_datetime(row.get('end_time_dt')).strftime('%y-%m-%d %H:%M:%S') if pd.notna(row.get('end_time_dt')) else '',
+                    self._format_seconds(row.get('work_time', 0)),
+                    row.get('item_display', ''),
+                    f"{int(row.get('pcs_completed', 0)):,}",
+                    row.get('work_order_id', ''), row.get('product_batch', '')
+                ]
+                self.trace_tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 != 0 else "",))
+
 
     def _on_comparison_standby_double_click(self, event):
         tree = event.widget
@@ -2371,7 +2448,7 @@ class WorkerAnalysisGUI:
         
         current_display = self.data_tree.cget('displaycolumns')
         if not current_display or current_display == ('#all',):
-             current_display = all_columns
+            current_display = all_columns
         
         vars = {col: tk.BooleanVar(value=(col in current_display)) for col in all_columns}
 
