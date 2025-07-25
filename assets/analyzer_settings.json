@@ -1,5 +1,5 @@
 {
-    "scale_factor": 1.2999999999999994,
+    "scale_factor": 0.9999999999999992,
     "column_widths": {
         "realtime_item_#1": 156,
         "realtime_worker_#1": 275,
@@ -23,7 +23,7 @@
     "pane_positions": {
         "main": 307,
         "packaging_prod": 614,
-        "realtime_main": 925,
+        "realtime_main": 972,
         "overview_bottom": 0,
         "prod_charts": 674,
         "detailed_main": 275,

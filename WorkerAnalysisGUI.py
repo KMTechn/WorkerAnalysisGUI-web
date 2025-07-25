@@ -311,7 +311,7 @@ class DataAnalyzer:
                 df.dropna(subset=['timestamp'], inplace=True)
                 if df.empty: continue
                 
-                df['details'] = df['details'].apply(lambda x: json.loads(x) if isinstance(x, str) and x.strip().startswith('{') else {})
+                # `details` 파싱 로직을 `process_events_to_sessions`로 이동
                 if not df.empty: all_event_data_dfs.append(df)
 
             except Exception as e:
@@ -331,11 +331,39 @@ class DataAnalyzer:
 
         completed_trays_df = event_df[event_df['event'] == 'TRAY_COMPLETE'].copy()
         if completed_trays_df.empty: return pd.DataFrame()
-        
+
+        def _parse_details(detail_data):
+            """JSON과 새로운 QR 형식(key=value|...)을 모두 처리하는 헬퍼 함수"""
+            if isinstance(detail_data, dict):
+                return detail_data # 이미 dict 형태이면 그대로 반환
+            if not isinstance(detail_data, str):
+                return {}
+
+            # 1. JSON 파싱 시도
+            try:
+                if detail_data.strip().startswith('{'):
+                    return json.loads(detail_data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            # 2. QR 형식 파싱 시도
+            try:
+                if '|' in detail_data and '=' in detail_data:
+                    # 'PHS=1|CLC=...' 형식의 데이터를 dict로 변환
+                    return dict(item.split('=', 1) for item in detail_data.split('|') if '=' in item)
+            except ValueError: # '='가 없는 항목 등으로 인한 오류 방지
+                pass
+
+            return {} # 어떤 형식에도 해당하지 않으면 빈 dict 반환
+
+        # apply를 사용하여 details 컬럼을 일괄적으로 파싱
+        completed_trays_df['details'] = completed_trays_df['details'].apply(_parse_details)
+
         def safe_get(d, k, default):
             return d.get(k, default) if isinstance(d, dict) else default
 
         details_series = completed_trays_df['details']
+        
         completed_trays_df['start_time_str'] = details_series.apply(lambda d: safe_get(d, 'start_time', ''))
         completed_trays_df['start_time_dt'] = pd.to_datetime(completed_trays_df['start_time_str'], errors='coerce')
         completed_trays_df.dropna(subset=['start_time_dt'], inplace=True)
@@ -360,28 +388,37 @@ class DataAnalyzer:
             'date': completed_trays_df['start_time_dt'].dt.date,
             'start_time_dt': completed_trays_df['start_time_dt'],
             'end_time_dt': completed_trays_df['timestamp'],
-            'shipping_date': details_series.apply(lambda d: safe_get(d, 'shipping_date', safe_get(d, 'production_date', pd.NaT))),
+            
+            # --- 신규/변경 필드 ---
+            'shipping_date': details_series.apply(lambda d: safe_get(d, 'OBD', safe_get(d, 'shipping_date', pd.NaT))), # OBD 우선
+            'item_code': details_series.apply(lambda d: safe_get(d, 'CLC', safe_get(d, 'item_code', 'N/A'))), # CLC 우선
+            'work_order_id': details_series.apply(lambda d: safe_get(d, 'WID', 'N/A')),
+            'phase': details_series.apply(lambda d: safe_get(d, 'PHS', 'N/A')),
+            'supplier_code': details_series.apply(lambda d: safe_get(d, 'SPC', 'N/A')),
+            'product_batch': details_series.apply(lambda d: safe_get(d, 'FPB', 'N/A')),
+            'item_group': details_series.apply(lambda d: safe_get(d, 'IG', 'N/A')),
+            
+            # --- 기존 필드 (호환성 유지) ---
             'worker': completed_trays_df['worker'],
             'process': completed_trays_df['process'],
-            'item_code': details_series.apply(lambda d: safe_get(d, 'item_code', 'N/A')),
-            'item_name': details_series.apply(lambda d: safe_get(d, 'item_name', '')),
-            'work_time': details_series.apply(lambda d: safe_get(d, 'work_time', safe_get(d, 'work_time_sec', 0.0))),
+            'item_name': details_series.apply(lambda d: safe_get(d, 'item_name', '')), # item_name은 기존 유지
+            'work_time': details_series.apply(lambda d: float(safe_get(d, 'work_time', safe_get(d, 'work_time_sec', 0.0)))),
             'latency': completed_trays_df['latency'],
-            'idle_time': details_series.apply(lambda d: safe_get(d, 'idle_time', safe_get(d, 'total_idle_seconds', 0.0))),
-            'process_errors': details_series.apply(lambda d: safe_get(d, 'process_errors', safe_get(d, 'error_count', 0))),
+            'idle_time': details_series.apply(lambda d: float(safe_get(d, 'idle_time', safe_get(d, 'total_idle_seconds', 0.0)))),
+            'process_errors': details_series.apply(lambda d: int(safe_get(d, 'process_errors', safe_get(d, 'error_count', 0)))),
             'had_error': details_series.apply(lambda d: int(safe_get(d, 'had_error', safe_get(d, 'has_error_or_reset', False)))),
             'is_partial': details_series.apply(lambda d: safe_get(d, 'is_partial', safe_get(d, 'is_partial_submission', False))),
             'is_restored': details_series.apply(lambda d: safe_get(d, 'is_restored_session', False)),
             'is_test': details_series.apply(lambda d: safe_get(d, 'is_test', safe_get(d, 'is_test_tray', False))),
             'pcs_completed': pcs_completed_values,
-            'defective_count': details_series.apply(lambda d: safe_get(d, 'defective_count', 0))
+            'defective_count': details_series.apply(lambda d: int(safe_get(d, 'defective_count', 0)))
         })
 
         sessions_df['shipping_date'] = pd.to_datetime(sessions_df['shipping_date'], errors='coerce')
         sessions_df['item_display'] = sessions_df['item_name'].astype(str) + " (" + sessions_df['item_code'].astype(str) + ")"
         
         return sessions_df
-
+        
     def filter_data(self, df: pd.DataFrame, start_date, end_date, selected_workers, shipping_start_date=None, shipping_end_date=None):
         if df.empty: return pd.DataFrame()
         
@@ -1009,7 +1046,7 @@ class WorkerAnalysisGUI:
             else:
                 for i, worker in enumerate(workers):
                     if worker in current_workers: self.worker_listbox.selection_set(i)
-                        
+                    
         if was_new_load and not self.full_df.empty and 'date' in self.full_df.columns:
             min_d, max_d = self.full_df['date'].min(), self.full_df['date'].max()
             if pd.notna(min_d) and pd.notna(max_d):
@@ -1067,24 +1104,29 @@ class WorkerAnalysisGUI:
         self.data_table_tab_frame = ttk.Frame(notebook, style='TFrame', padding=10)
         self.comparison_tab_frame = ttk.Frame(notebook, style='TFrame', padding=10)
         self.error_log_tab_frame = ttk.Frame(notebook, style='TFrame', padding=10)
+        self.trace_tab_frame = ttk.Frame(notebook, style='TFrame', padding=10)
 
         if mode == "포장실":
             notebook.add(self.realtime_tab_frame, text="🔴 실시간 현황")
             notebook.add(self.production_tab_frame, text="📈 생산량 추이 분석")
             notebook.add(self.error_log_tab_frame, text="❗ 오류 로그")
+            notebook.add(self.trace_tab_frame, text="🔎 생산 이력 추적")
             notebook.add(self.data_table_tab_frame, text="📋 상세 데이터")
         elif mode == "검사실":
             notebook.add(self.realtime_tab_frame, text="🔴 실시간 현황")
             notebook.add(self.production_tab_frame, text="📈 검사량 분석")
             notebook.add(self.detail_tab_frame, text="👥 작업자별 분석")
+            notebook.add(self.trace_tab_frame, text="🔎 생산 이력 추적")
             notebook.add(self.data_table_tab_frame, text="📋 상세 데이터")
         elif mode == "전체 비교":
             notebook.add(self.comparison_tab_frame, text="⚖️ 공정 비교 분석")
+            notebook.add(self.trace_tab_frame, text="🔎 생산 이력 추적")
             notebook.add(self.data_table_tab_frame, text="📋 상세 데이터")
         else: # 이적실
             notebook.add(self.realtime_tab_frame, text="🔴 실시간 현황")
             notebook.add(self.production_tab_frame, text="📈 생산량 분석")
             notebook.add(self.detail_tab_frame, text="👥 작업자별 분석")
+            notebook.add(self.trace_tab_frame, text="🔎 생산 이력 추적")
             notebook.add(self.data_table_tab_frame, text="📋 상세 데이터")
 
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -1120,6 +1162,8 @@ class WorkerAnalysisGUI:
             self._draw_detailed_tab(self.detail_tab_frame)
         elif selected_tab_widget == self.comparison_tab_frame and mode == "전체 비교":
             self._draw_overall_comparison_tab(self.comparison_tab_frame)
+        elif selected_tab_widget == self.trace_tab_frame:
+            self._draw_traceability_tab(self.trace_tab_frame)
         elif selected_tab_widget == self.data_table_tab_frame:
             self._draw_data_table_tab(self.data_table_tab_frame)
             self._repopulate_data_table(self.filtered_df_raw)
@@ -1251,6 +1295,95 @@ class WorkerAnalysisGUI:
         if not packaging_df_copy.empty:
             packaging_df_copy['date_dt'] = pd.to_datetime(packaging_df_copy['date'])
         self._draw_daily_production_chart(packaging_chart_frame, packaging_df_copy, "포장실 생산량 추이", "D")
+
+    def _draw_traceability_tab(self, parent):
+        self._clear_tab(parent)
+        
+        # --- 검색 UI 생성 ---
+        search_frame = ttk.Frame(parent, style='Card.TFrame', padding=15)
+        search_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(search_frame, text="작업지시 ID (WID):", style='Sidebar.TLabel').grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        self.trace_wid_entry = ttk.Entry(search_frame, width=30)
+        self.trace_wid_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+
+        ttk.Label(search_frame, text="완제품 배치 (FPB):", style='Sidebar.TLabel').grid(row=0, column=2, padx=5, pady=5, sticky='w')
+        self.trace_fpb_entry = ttk.Entry(search_frame, width=30)
+        self.trace_fpb_entry.grid(row=0, column=3, padx=5, pady=5, sticky='ew')
+        
+        search_button = ttk.Button(search_frame, text="🔍 검색", command=self._perform_trace_search)
+        search_button.grid(row=0, column=4, padx=10, pady=5)
+        search_frame.grid_columnconfigure(1, weight=1)
+        search_frame.grid_columnconfigure(3, weight=1)
+
+        # --- 결과 표시 Treeview 생성 ---
+        result_frame = ttk.Frame(parent)
+        result_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.trace_tree = ttk.Treeview(result_frame)
+        vsb = ttk.Scrollbar(result_frame, orient="vertical", command=self.trace_tree.yview)
+        hsb = ttk.Scrollbar(result_frame, orient="horizontal", command=self.trace_tree.xview)
+        self.trace_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
+        vsb.pack(side='right', fill='y')
+        hsb.pack(side='bottom', fill='x')
+        self.trace_tree.pack(side='left', fill='both', expand=True)
+
+        columns_config = {
+            '공정': {'anchor': 'center'}, '작업자': {'anchor': 'center'},
+            '차수': {'anchor': 'center'}, '작업 시작': {'anchor': 'w'},
+            '작업 종료': {'anchor': 'w'}, '작업 시간': {'anchor': 'e'},
+            '품목': {'anchor': 'w'}, '완료수량': {'anchor': 'e'},
+            '작업지시 ID': {'anchor': 'w'}, '완제품 배치': {'anchor': 'w'}
+        }
+        self._setup_treeview_columns(self.trace_tree, columns_config, 'trace_table', stretch_col='품목')
+        self.trace_tree.bind('<Configure>', lambda e, t=self.trace_tree, name='trace_table': self._on_column_resize(e, t, name))
+
+    def _perform_trace_search(self):
+        wid_query = self.trace_wid_entry.get().strip()
+        fpb_query = self.trace_fpb_entry.get().strip()
+
+        if not wid_query and not fpb_query:
+            messagebox.showinfo("알림", "작업지시 ID 또는 완제품 배치 번호를 입력해주세요.", parent=self.root)
+            return
+
+        # 전체 데이터에서 검색 (필터링 안된 원본)
+        search_base_df = self.full_df.copy()
+        if search_base_df.empty:
+            messagebox.showwarning("데이터 없음", "분석할 데이터가 로드되지 않았습니다.", parent=self.root)
+            return
+
+        result_df = pd.DataFrame()
+        if wid_query:
+            result_df = search_base_df[search_base_df['work_order_id'].str.contains(wid_query, case=False, na=False)]
+        elif fpb_query:
+            result_df = search_base_df[search_base_df['product_batch'].str.contains(fpb_query, case=False, na=False)]
+
+        # Treeview 초기화
+        for i in self.trace_tree.get_children():
+            self.trace_tree.delete(i)
+
+        if result_df.empty:
+            messagebox.showinfo("검색 결과 없음", "해당 조건에 맞는 작업 이력을 찾을 수 없습니다.", parent=self.root)
+            return
+
+        # 공정 순서(검사->이적->포장) 및 시간순으로 정렬
+        process_order = ['검사실', '이적실', '포장실']
+        result_df['process'] = pd.Categorical(result_df['process'], categories=process_order, ordered=True)
+        result_df = result_df.sort_values(by=['process', 'start_time_dt'])
+
+        for i, row in result_df.iterrows():
+            values = [
+                row.get('process', ''), row.get('worker', ''),
+                row.get('phase', ''),
+                pd.to_datetime(row.get('start_time_dt')).strftime('%y-%m-%d %H:%M:%S') if pd.notna(row.get('start_time_dt')) else '',
+                pd.to_datetime(row.get('end_time_dt')).strftime('%y-%m-%d %H:%M:%S') if pd.notna(row.get('end_time_dt')) else '',
+                self._format_seconds(row.get('work_time', 0)),
+                row.get('item_display', ''),
+                f"{int(row.get('pcs_completed', 0)):,}",
+                row.get('work_order_id', ''), row.get('product_batch', '')
+            ]
+            self.trace_tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 != 0 else "",))
 
     def _on_comparison_standby_double_click(self, event):
         tree = event.widget
@@ -1408,6 +1541,12 @@ class WorkerAnalysisGUI:
         
         for i, row in df_errors.iterrows():
             details = row['details']
+            if not isinstance(details, dict):
+                try:
+                    details = json.loads(details) if isinstance(details, str) else {}
+                except:
+                    details = {}
+
             event = row['event']
             reason, detail_info = "", ""
             
@@ -1700,7 +1839,7 @@ class WorkerAnalysisGUI:
         if mode == '검사실':
             avg_defect_rate = self.kpis.get('avg_defect_rate', 0.0)
             defect_card = self._create_dashboard_card(kpi_frame, "전체 평균 불량률", f"{avg_defect_rate:.2%}", "🔬", 
-                                                    value_color=self.COLOR_DANGER if avg_defect_rate > 0.01 else self.COLOR_SUCCESS)
+                                                      value_color=self.COLOR_DANGER if avg_defect_rate > 0.01 else self.COLOR_SUCCESS)
             defect_card.grid(row=0, column=2, sticky='nsew', padx=5)
             defect_card.bind("<Button-1>", lambda e: self._show_defect_rate_by_item())
             for child in defect_card.winfo_children():
@@ -1980,7 +2119,7 @@ class WorkerAnalysisGUI:
         top_frame.grid_columnconfigure(tuple(range(num_columns + 1)), weight=1)
 
         score_card = self._create_dashboard_card(top_frame, "종합 성과 점수", f"{worker_performance.overall_score:.1f} 점", "⭐",
-                                               value_color=self.COLOR_SUCCESS if worker_performance.overall_score >= 70 else (self.COLOR_DANGER if worker_performance.overall_score < 50 else self.COLOR_TEXT))
+                                                 value_color=self.COLOR_SUCCESS if worker_performance.overall_score >= 70 else (self.COLOR_DANGER if worker_performance.overall_score < 50 else self.COLOR_TEXT))
         score_card.grid(row=0, column=0, sticky='nsew', padx=5, rowspan=2)
         
         best_time_text = f"(금주 최고: {self._format_seconds(worker_performance.best_work_time)}"
@@ -2103,32 +2242,34 @@ class WorkerAnalysisGUI:
             ttk.Label(parent, text="이 작업자의 품목별 데이터가 없습니다.", style="Sidebar.TLabel").pack(expand=True)
             return
             
-        item_summary = worker_filtered_df.groupby('item_display').agg(
+        # 차수(phase)를 포함하여 그룹화
+        item_summary = worker_filtered_df.groupby(['item_display', 'phase']).agg(
             avg_work_time=('work_time', 'mean'),
             work_time_std=('work_time', 'std'),
             total_pcs=('pcs_completed', 'sum')
-        ).fillna(0).reset_index().sort_values(by='avg_work_time')
+        ).fillna(0).reset_index().sort_values(by=['item_display', 'phase'])
         
         item_summary['total_pallets'] = item_summary['total_pcs'] / 60
         
         tree_container = ttk.Frame(parent)
         tree_container.pack(fill=tk.BOTH, expand=True)
         tree = ttk.Treeview(tree_container)
+        
+        # 컬럼 설정에 '차수' 추가
         columns_config = {
-            '품목': {'anchor': 'w'},
-            '평균시간': {'anchor': 'e'},
-            '안정성(초)': {'anchor': 'e'},
-            '총 PCS': {'anchor': 'e'},
-            '총 Pallets': {'anchor': 'e'}
+            '품목': {'anchor': 'w'}, '차수': {'anchor': 'center'},
+            '평균시간': {'anchor': 'e'}, '안정성(초)': {'anchor': 'e'},
+            '총 PCS': {'anchor': 'e'}, '총 Pallets': {'anchor': 'e'}
         }
-        self._setup_treeview_columns(tree, columns_config, 'item_perf', stretch_col='품목')
+        self._setup_treeview_columns(tree, columns_config, 'item_perf_phase', stretch_col='품목')
         
         for i, row in item_summary.iterrows():
             values = [
-                row['item_display'], f"{row['avg_work_time']:.1f}", f"{row['work_time_std']:.1f}",
+                row['item_display'], row['phase'],
+                f"{row['avg_work_time']:.1f}", f"{row['work_time_std']:.1f}",
                 f"{int(row['total_pcs']):,}", f"{row['total_pallets']:.1f}"
             ]
-            tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 == 0 else "",))
+            tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 != 0 else "",))
             
         vsb = ttk.Scrollbar(tree_container, orient="vertical", command=tree.yview)
         hsb = ttk.Scrollbar(tree_container, orient="horizontal", command=tree.xview)
@@ -2136,7 +2277,7 @@ class WorkerAnalysisGUI:
         vsb.pack(side='right', fill='y')
         hsb.pack(side='bottom', fill='x')
         tree.pack(fill=tk.BOTH, expand=True)
-        tree.bind('<Configure>', lambda e, t=tree, name='item_perf': self._on_column_resize(e, t, name))
+        tree.bind('<Configure>', lambda e, t=tree, name='item_perf_phase': self._on_column_resize(e, t, name))
 
     def _draw_data_table_tab(self, parent_tab):
         self._clear_tab(parent_tab)
@@ -2331,28 +2472,35 @@ class WorkerAnalysisGUI:
         
         df_display['수량 (PCS/Pallet)'] = df_display.apply(format_pcs_pallets, axis=1)
         
+        # 표시할 컬럼 목록 업데이트
         cols_to_display = [
-            '날짜', '시작 시간', 'worker', 'process', 'item_display',
+            '날짜', '시작 시간', 'worker', 'process', 'phase', 'item_display',
+            'work_order_id', 'product_batch',
             '작업시간', '준비시간', '수량 (PCS/Pallet)', '오류수', '오류 발생 여부'
         ]
-        if 'shipping_date' in df_display.columns:
+        if 'shipping_date' in df_display.columns and '출고 날짜' in df_display.columns:
             cols_to_display.insert(2, '출고 날짜')
             
+        # 컬럼 헤더 이름 매핑 업데이트
         header_map = {
-            'worker': '작업자', 'process': '공정', 'item_display': '품목'
+            'worker': '작업자', 'process': '공정', 'item_display': '품목',
+            'work_order_id': '작업지시 ID', 'phase': '차수', 'product_batch': '완제품 배치'
         }
-        self.currently_displayed_table_df = df_display[cols_to_display].rename(columns=header_map)
+        
+        # 누락된 컬럼이 있을 수 있으므로, 실제 존재하는 컬럼만 선택
+        final_cols_to_display = [col for col in cols_to_display if col in df_display.columns]
+        self.currently_displayed_table_df = df_display[final_cols_to_display].rename(columns=header_map)
         
         columns_config = {}
         for col_name in self.currently_displayed_table_df.columns:
-            anchor = 'w' if any(txt in col_name for txt in ['품목', '날짜', '시간']) else 'center'
+            anchor = 'w' if any(txt in col_name for txt in ['품목', '날짜', '시간', 'ID', '배치']) else 'center'
             columns_config[col_name] = {'anchor': anchor}
             
         self._setup_treeview_columns(self.data_tree, columns_config, 'data_table', stretch_col='품목')
         
         for i, row in self.currently_displayed_table_df.iterrows():
             values = list(row)
-            self.data_tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 else "",))
+            self.data_tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 != 0 else "",))
 
     def _export_to_excel(self):
         if self.currently_displayed_table_df.empty:
