@@ -703,6 +703,8 @@ class WorkerAnalysisGUI:
         self.full_df, self.filtered_df_raw, self.realtime_today_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         self.worker_data, self.kpis = {}, {}
         self.normalized_df, self.currently_displayed_table_df = pd.DataFrame(), pd.DataFrame()
+        self.current_error_log_df = pd.DataFrame()
+        self.currently_traced_df = pd.DataFrame()
         
         self.style = ttk.Style()
         self.style.theme_use('clam')
@@ -1185,8 +1187,8 @@ class WorkerAnalysisGUI:
         self._clear_tab(parent)
         if self.filtered_df_raw.empty:
             ttk.Label(parent, text="비교할 데이터가 없습니다. 필터 조건을 확인해주세요.",
-                      font=(self.DEFAULT_FONT, 16), justify='center',
-                      foreground=self.COLOR_TEXT_SUBTLE).pack(expand=True)
+                          font=(self.DEFAULT_FONT, 16), justify='center',
+                          foreground=self.COLOR_TEXT_SUBTLE).pack(expand=True)
             return
 
         main_v_pane = ttk.PanedWindow(parent, orient=tk.VERTICAL)
@@ -1357,7 +1359,8 @@ class WorkerAnalysisGUI:
         if not hasattr(self, 'trace_tree') or not self.trace_tree.winfo_exists():
             return
 
-        # 이전 결과 초기화
+        # 이전 이벤트 핸들러 해제 및 결과 초기화
+        self.trace_tree.unbind('<Double-1>')
         for i in self.trace_tree.get_children():
             self.trace_tree.delete(i)
 
@@ -1365,56 +1368,52 @@ class WorkerAnalysisGUI:
         fpb_query = self.trace_fpb_entry.get().strip()
         barcode_query = self.trace_barcode_entry.get().strip()
 
-        # --- 시나리오 1: 개별 제품 바코드 검색 ---
+        # --- 시나리오 1: 개별 제품 바코드 검색 (개선된 로직) ---
         if barcode_query:
             raw_df = self.analyzer.raw_event_df
             if raw_df.empty:
                 messagebox.showwarning("데이터 없음", "추적할 원본 로그 데이터가 없습니다.", parent=self.root)
                 return
 
-            # 'SCAN_OK'와 'DEFECTIVE_SCAN' 이벤트를 필터링하고 details를 파싱
-            scan_events = raw_df[raw_df['event'].isin(['SCAN_OK', 'DEFECTIVE_SCAN'])].copy()
-
-            def _parse_scan_details(detail_str):
-                try:
-                    # details가 이미 dict 형태일 수 있으므로 확인
-                    if isinstance(detail_str, dict):
-                        return detail_str
-                    # 문자열 형태의 JSON 파싱
-                    if isinstance(detail_str, str) and detail_str.strip().startswith('{'):
-                         return json.loads(detail_str)
-                    return {}
-                except (json.JSONDecodeError, TypeError):
-                    return {}
-
-            scan_events['details_dict'] = scan_events['details'].apply(_parse_scan_details)
+            # details 컬럼을 문자열로 변환하여 검색 준비
+            search_df = raw_df.copy()
+            search_df['details_str'] = search_df['details'].astype(str)
             
-            # 입력된 바코드와 일치하는 이벤트 검색
-            result_df = scan_events[scan_events['details_dict'].apply(lambda d: d.get('barcode') == barcode_query if isinstance(d, dict) else False)]
+            # 정규표현식을 사용하여 '"barcode": "..."' 패턴 검색 (공백 허용)
+            # re.escape를 사용하여 바코드 값에 특수문자가 있어도 안전하게 처리
+            result_df = search_df[search_df['details_str'].str.contains(f'"barcode":\\s*"{re.escape(barcode_query)}"', regex=True, na=False)]
 
             if result_df.empty:
-                messagebox.showinfo("검색 결과 없음", f"바코드 '{barcode_query}'에 대한 스캔 이력을 찾을 수 없습니다.", parent=self.root)
+                messagebox.showinfo("검색 결과 없음", f"바코드 '{barcode_query}'를 포함하는 이력을 찾을 수 없습니다.", parent=self.root)
                 return
 
-            # 바코드 추적용으로 Treeview 컬럼 재설정
+            # Treeview 컬럼을 바코드 추적용으로 재설정
             columns_config = {
-                '스캔 시간': {'anchor': 'w'}, '공정': {'anchor': 'center'},
-                '작업자': {'anchor': 'center'}, '스캔 유형': {'anchor': 'center'},
-                '개별 바코드': {'anchor': 'w'}
+                '시간': {'anchor': 'w'}, '공정': {'anchor': 'center'},
+                '작업자': {'anchor': 'center'}, '이벤트': {'anchor': 'center'},
+                '상세정보': {'anchor': 'w'}
             }
-            self._setup_treeview_columns(self.trace_tree, columns_config, 'barcode_trace_table', stretch_col='개별 바코드')
+            self._setup_treeview_columns(self.trace_tree, columns_config, 'barcode_trace_table', stretch_col='상세정보')
             
-            # 시간순으로 정렬 (오래된 순)
+            # 시간순으로 정렬 (오래된 순 -> 최신 순)
             result_df = result_df.sort_values(by='timestamp', ascending=True)
             
             for i, row in result_df.iterrows():
                 scan_time = pd.to_datetime(row['timestamp']).strftime('%y-%m-%d %H:%M:%S.%f')[:-3]
-                event_type = "불량" if row['event'] == 'DEFECTIVE_SCAN' else "정상"
-                values = [scan_time, row.get('process'), row.get('worker'), event_type, barcode_query]
-                # 불량 스캔인 경우 행 색상 변경
-                tags = ("RedRow.Treeview" if event_type == "불량" else ("oddrow" if i % 2 != 0 else ""),)
+                event_name = row['event']
+                details_str = str(row['details'])
+                values = [scan_time, row.get('process'), row.get('worker'), event_name, details_str]
+                
+                # 특정 이벤트에 따라 행 색상 변경
+                tags = ()
+                if any(err_word in event_name.upper() for err_word in ['ERROR', 'DEFECTIVE', 'CANCEL']):
+                    tags = ("RedRow.Treeview",)
+                elif i % 2 != 0:
+                    tags = ("oddrow",)
+
                 self.trace_tree.insert('', 'end', values=values, tags=tags)
-        
+            return # 바코드 검색 로직 종료
+
         # --- 시나리오 2 & 3: 세션 단위 검색 또는 전체 보기 ---
         else:
             search_base_df = self.full_df.copy()
@@ -1459,8 +1458,89 @@ class WorkerAnalysisGUI:
                     f"{int(row.get('pcs_completed', 0)):,}",
                     row.get('work_order_id', ''), row.get('product_batch', '')
                 ]
-                self.trace_tree.insert('', 'end', values=values, tags=("oddrow" if i % 2 != 0 else "",))
+                # 더블클릭으로 바코드 목록을 볼 수 있도록 데이터프레임 인덱스를 iid로 저장
+                self.trace_tree.insert('', 'end', iid=i, values=values, tags=("oddrow" if i % 2 != 0 else "",))
+            
+            # 현재 표시된 데이터프레임을 저장하고 더블클릭 이벤트를 바인딩
+            self.currently_traced_df = result_df.copy()
+            self.trace_tree.bind('<Double-1>', self._on_session_double_click)
 
+    def _on_session_double_click(self, event):
+        selected_item_id = self.trace_tree.focus()
+        if not selected_item_id:
+            return
+
+        # 현재 뷰가 바코드 검색 결과 뷰인 경우, 이 함수를 실행하지 않음
+        if '상세정보' in self.trace_tree['columns']:
+            return 
+
+        try:
+            # 저장된 데이터프레임에서 iid(인덱스)를 사용하여 세션 데이터 검색
+            session_data = self.currently_traced_df.loc[int(selected_item_id)]
+        except (KeyError, ValueError):
+            print(f"세션 데이터를 찾을 수 없습니다: {selected_item_id}")
+            return
+
+        start_time = session_data['start_time_dt']
+        end_time = session_data['end_time_dt']
+        worker = session_data['worker']
+        process = session_data['process']
+
+        # 원본 이벤트 로그에서 해당 세션 기간 동안의 스캔 이벤트 필터링
+        raw_df = self.analyzer.raw_event_df
+        session_scans = raw_df[
+            (raw_df['timestamp'] >= start_time) &
+            (raw_df['timestamp'] <= end_time) &
+            (raw_df['worker'] == worker) &
+            (raw_df['process'] == process) &
+            (raw_df['event'] == 'SCAN_OK')
+        ].copy()
+
+        barcodes = []
+        if not session_scans.empty:
+            for detail_str in session_scans['details']:
+                try:
+                    if isinstance(detail_str, str) and detail_str.strip().startswith('{'):
+                        detail_dict = json.loads(detail_str)
+                        if 'barcode' in detail_dict:
+                            barcodes.append(detail_dict['barcode'])
+                except (json.JSONDecodeError, TypeError):
+                    continue # 파싱 오류는 무시
+
+        self._show_barcodes_popup(barcodes, session_data)
+
+    def _show_barcodes_popup(self, barcodes, session_data):
+        win = tk.Toplevel(self.root)
+        item_name = session_data.get('item_display', 'N/A')
+        win.title(f"제품 바코드 목록 ({item_name})")
+        win.geometry("500x600")
+        win.transient(self.root)
+        win.grab_set()
+
+        count = len(barcodes)
+        info_label = ttk.Label(win, text=f"총 {count}개의 제품 바코드를 스캔했습니다.", padding=(10,10))
+        info_label.pack(fill=tk.X)
+
+        tree_frame = ttk.Frame(win, padding=(10, 0, 10, 10))
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        tree = ttk.Treeview(tree_frame, columns=['#', 'barcode'], show='headings')
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+
+        tree.heading('#', text='번호', anchor='center')
+        tree.heading('barcode', text='제품 바코드')
+        tree.column('#', width=50, stretch=False, anchor='center')
+        tree.column('barcode', width=400, stretch=True)
+
+        vsb.pack(side='right', fill='y')
+        tree.pack(side='left', fill='both', expand=True)
+
+        if not barcodes:
+            tree.insert('', 'end', values=("", "스캔된 바코드를 찾을 수 없습니다."))
+        else:
+            for i, barcode in enumerate(barcodes, 1):
+                tree.insert('', 'end', values=(i, barcode), tags=("oddrow" if i % 2 != 0 else "",))
 
     def _on_comparison_standby_double_click(self, event):
         tree = event.widget
@@ -1604,6 +1684,14 @@ class WorkerAnalysisGUI:
             ttk.Label(parent, text="선택된 기간/작업자에 해당하는 오류 기록이 없습니다.", font=(self.DEFAULT_FONT, 16), justify='center', foreground=self.COLOR_TEXT_SUBTLE).pack(expand=True)
             return
             
+        # 내보내기를 위해 현재 오류 로그 데이터프레임을 저장합니다.
+        self.current_error_log_df = df_errors.copy()
+
+        # CSV 저장 버튼을 추가합니다.
+        button_frame = ttk.Frame(parent, style='TFrame')
+        button_frame.pack(fill=tk.X, pady=(0, 5), padx=10)
+        ttk.Button(button_frame, text="📄 CSV로 저장하기", command=self._export_error_log_to_csv).pack(side=tk.RIGHT)
+        
         tree_container = ttk.Frame(parent)
         tree_container.pack(fill=tk.BOTH, expand=True)
         tree = ttk.Treeview(tree_container)
@@ -2196,7 +2284,7 @@ class WorkerAnalysisGUI:
         top_frame.grid_columnconfigure(tuple(range(num_columns + 1)), weight=1)
 
         score_card = self._create_dashboard_card(top_frame, "종합 성과 점수", f"{worker_performance.overall_score:.1f} 점", "⭐",
-                                                 value_color=self.COLOR_SUCCESS if worker_performance.overall_score >= 70 else (self.COLOR_DANGER if worker_performance.overall_score < 50 else self.COLOR_TEXT))
+                                               value_color=self.COLOR_SUCCESS if worker_performance.overall_score >= 70 else (self.COLOR_DANGER if worker_performance.overall_score < 50 else self.COLOR_TEXT))
         score_card.grid(row=0, column=0, sticky='nsew', padx=5, rowspan=2)
         
         best_time_text = f"(금주 최고: {self._format_seconds(worker_performance.best_work_time)}"
@@ -2602,6 +2690,30 @@ class WorkerAnalysisGUI:
             messagebox.showinfo("성공", f"데이터를 성공적으로 저장했습니다:\n{file_path}")
         except Exception as e:
             messagebox.showerror("저장 실패", f"파일을 저장하는 중 오류가 발생했습니다:\n{e}")
+
+    def _export_error_log_to_csv(self):
+        if not hasattr(self, 'current_error_log_df') or self.current_error_log_df.empty:
+            messagebox.showinfo("정보", "내보낼 오류 로그 데이터가 없습니다.", parent=self.root)
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV 파일", "*.csv"), ("모든 파일", "*.*")],
+            title="오류 로그 저장"
+        )
+        if not file_path:
+            return
+
+        try:
+            # 내보내기에 필요한 컬럼만 선택
+            cols_to_export = ['timestamp', 'worker', 'process', 'event', 'details']
+            export_df = self.current_error_log_df[cols_to_export]
+            
+            # UTF-8 (BOM 포함) 인코딩으로 CSV 파일 저장 (Excel 호환성)
+            export_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            messagebox.showinfo("성공", f"오류 로그를 성공적으로 저장했습니다:\n{file_path}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("저장 실패", f"파일을 저장하는 중 오류가 발생했습니다:\n{e}", parent=self.root)
 
     def _on_column_resize(self, event: Any, treeview: ttk.Treeview, tree_name: str):
         if not treeview.identify_region(event.x, event.y) == "separator":
