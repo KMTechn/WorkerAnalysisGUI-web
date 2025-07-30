@@ -1118,6 +1118,7 @@ class WorkerAnalysisGUI:
             notebook.add(self.realtime_tab_frame, text="🔴 실시간 현황")
             notebook.add(self.production_tab_frame, text="📈 검사량 분석")
             notebook.add(self.detail_tab_frame, text="👥 작업자별 분석")
+            notebook.add(self.error_log_tab_frame, text="❗ 오류 로그")
             notebook.add(self.trace_tab_frame, text="🔎 생산 이력 추적")
             notebook.add(self.data_table_tab_frame, text="📋 상세 데이터")
         elif mode == "전체 비교":
@@ -1128,6 +1129,7 @@ class WorkerAnalysisGUI:
             notebook.add(self.realtime_tab_frame, text="🔴 실시간 현황")
             notebook.add(self.production_tab_frame, text="📈 생산량 분석")
             notebook.add(self.detail_tab_frame, text="👥 작업자별 분석")
+            notebook.add(self.error_log_tab_frame, text="❗ 오류 로그")
             notebook.add(self.trace_tab_frame, text="🔎 생산 이력 추적")
             notebook.add(self.data_table_tab_frame, text="📋 상세 데이터")
 
@@ -1158,7 +1160,7 @@ class WorkerAnalysisGUI:
                 self._draw_simplified_packaging_production_view(self.production_tab_frame)
             else:
                 self._draw_production_main_tab(self.production_tab_frame)
-        elif selected_tab_widget == self.error_log_tab_frame and mode == "포장실":
+        elif selected_tab_widget == self.error_log_tab_frame:
             self._draw_error_log_tab(self.error_log_tab_frame)
         elif selected_tab_widget == self.detail_tab_frame and mode not in ["포장실", "전체 비교"]:
             self._draw_detailed_tab(self.detail_tab_frame)
@@ -1677,8 +1679,11 @@ class WorkerAnalysisGUI:
             mask &= raw_events['worker'].isin(selected_workers)
         df_filtered_logs = raw_events[mask]
         
-        error_events = ['ERROR_INPUT', 'ERROR_MISMATCH', 'SET_CANCELLED']
-        df_errors = df_filtered_logs[df_filtered_logs['event'].isin(error_events)].sort_values(by='timestamp', ascending=False)
+        # ### START: 수정된 부분 ###
+        # 특정 오류 이름 대신, 'ERROR', 'FAIL', 'CANCEL' 키워드가 포함된 모든 이벤트를 찾도록 변경
+        error_mask = df_filtered_logs['event'].str.contains('ERROR|FAIL|CANCEL', case=False, na=False)
+        df_errors = df_filtered_logs[error_mask].sort_values(by='timestamp', ascending=False)
+        # ### END: 수정된 부분 ###
         
         if df_errors.empty:
             ttk.Label(parent, text="선택된 기간/작업자에 해당하는 오류 기록이 없습니다.", font=(self.DEFAULT_FONT, 16), justify='center', foreground=self.COLOR_TEXT_SUBTLE).pack(expand=True)
@@ -1691,7 +1696,7 @@ class WorkerAnalysisGUI:
         button_frame = ttk.Frame(parent, style='TFrame')
         button_frame.pack(fill=tk.X, pady=(0, 5), padx=10)
         ttk.Button(button_frame, text="📄 CSV로 저장하기", command=self._export_error_log_to_csv).pack(side=tk.RIGHT)
-        
+
         tree_container = ttk.Frame(parent)
         tree_container.pack(fill=tk.BOTH, expand=True)
         tree = ttk.Treeview(tree_container)
@@ -1699,7 +1704,6 @@ class WorkerAnalysisGUI:
             '시간': {'anchor': 'w'},
             '작업자': {'anchor': 'center'},
             '오류 유형': {'anchor': 'center'},
-            '오류 내용': {'anchor': 'w'},
             '상세 정보': {'anchor': 'w'},
         }
         self._setup_treeview_columns(tree, columns_config, 'error_log', stretch_col='상세 정보')
@@ -1712,24 +1716,15 @@ class WorkerAnalysisGUI:
                 except:
                     details = {}
 
-            event = row['event']
-            reason, detail_info = "", ""
-            
-            if event == 'ERROR_INPUT':
-                reason = details.get('reason', 'N/A')
-                detail_info = f"입력값: {details.get('raw', '')}"
-            elif event == 'ERROR_MISMATCH':
-                reason = "현품표 불일치"
-                detail_info = f"입력: {details.get('edited', '')}, 기준: {details.get('master', '')}"
-            elif event == 'SET_CANCELLED':
-                reason = "사용자 세트 취소"
-                detail_info = f"취소된 세트 ID: {details.get('set_id', '')}"
+            # 상세 정보 컬럼을 간단하게 표시
+            detail_info = str(details)
+            if len(detail_info) > 100:
+                detail_info = detail_info[:100] + "..."
             
             tree.insert('', 'end', values=[
                 pd.to_datetime(row['timestamp']).strftime('%Y-%m-%d %H:%M:%S'),
                 row['worker'],
-                event,
-                reason,
+                row['event'],
                 detail_info
             ], tags=("oddrow" if i % 2 else "",))
             
