@@ -66,7 +66,7 @@ class ToolTip:
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "WorkerAnalysisGUI"
-CURRENT_VERSION = "v2.0.0" # 버전 업데이트
+CURRENT_VERSION = "v2.0.1" # 버전 업데이트
 
 def check_for_updates():
     try:
