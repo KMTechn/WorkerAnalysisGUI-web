@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>성과 분석 대시보드</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p>데이터 분석 중...</p>
+    </div>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <h2>성과 분석 대시보드</h2>
+                <span id="app-version">v3.0.0-web</span>
+            </header>
+
+            <nav class="filters">
+                <div class="filter-group">
+                    <label class="filter-label">공정 선택</label>
+                    <div id="process-mode-radios">
+                        <label><input type="radio" name="process_mode" value="이적실" checked> 이적실 분석</label>
+                        <label><input type="radio" name="process_mode" value="검사실"> 검사실 분석</label>
+                        <label><input type="radio" name="process_mode" value="포장실"> 포장실 분석</label>
+                        <label><input type="radio" name="process_mode" value="전체 비교"> 전체 비교</label>
+                    </div>
+                </div>
+
+                <div class="filter-group">
+                    <label for="log-folder-path" class="filter-label">로그 폴더</label>
+                    <p id="log-folder-path" class="log-folder-display">C:\Sync</p>
+                </div>
+
+                <div class="filter-group">
+                    <label class="filter-label">분석 기간</label>
+                    <input type="date" id="start-date-input">
+                    <span>~</span>
+                    <input type="date" id="end-date-input">
+                </div>
+
+                <div class="filter-group">
+                    <label for="worker-list" class="filter-label">작업자 선택</label>
+                    <div class="listbox-container">
+                        <select id="worker-list" multiple></select>
+                    </div>
+                </div>
+
+                <div class="filter-buttons">
+                    <button id="run-analysis-btn" class="btn btn-primary">분석 실행</button>
+                    <button id="reset-filters-btn" class="btn">필터 초기화</button>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="main-header">
+                <h1 id="main-title">대시보드</h1>
+                <div class="header-actions">
+                    <!-- 나중에 추가될 기능 (예: 테마 변경, 사용자 정보) -->
+                </div>
+            </header>
+
+            <div class="tabs">
+                <!-- 탭 버튼들은 JS로 동적 생성 -->
+            </div>
+
+            <div class="tab-content">
+                <!-- 탭 콘텐츠들은 JS로 동적 생성 -->
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

@@ -1,9 +1,8 @@
-requests
+flask
+flask-socketio
 pandas
 numpy
-matplotlib
-Pillow
-tkcalendar
 watchdog
 openpyxl
-pygame
+eventlet
+python-dateutil
