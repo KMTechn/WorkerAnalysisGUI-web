@@ -688,7 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 fill: true,
                 tension: 0.1
             }]
-        }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } });
+        }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } } );
     }
 
 
