@@ -129,9 +129,12 @@ def get_analysis_data():
         # 공정 비교 분석 데이터 계산
         comparison_data = None
         if process_mode == '전체 비교':
-            inspection_df = full_df[full_df['process'] == '검사실'].copy()
-            transfer_df = full_df[full_df['process'] == '이적실'].copy()
-            packaging_df = full_df[full_df['process'] == '포장실'].copy()
+            # 사용자가 선택한 기간으로 먼저 전체 데이터를 필터링합니다.
+            date_filtered_df = analyzer.filter_data(full_df.copy(), start_date, end_date, all_workers)
+
+            inspection_df = date_filtered_df[date_filtered_df['process'] == '검사실'].copy()
+            transfer_df = date_filtered_df[date_filtered_df['process'] == '이적실'].copy()
+            packaging_df = date_filtered_df[date_filtered_df['process'] == '포장실'].copy()
 
             inspection_kpis = analyzer._calculate_kpis(inspection_df)
             transfer_kpis = analyzer._calculate_kpis(transfer_df)

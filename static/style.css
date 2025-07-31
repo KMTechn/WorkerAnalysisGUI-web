@@ -385,6 +385,38 @@ body {
     margin-top: 20px;
 }
 
+.tab-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.period-radios {
+    display: flex;
+    gap: 10px;
+    background-color: var(--color-bg);
+    padding: 5px;
+    border-radius: 6px;
+}
+
+.period-radios label {
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+.period-radios input {
+    display: none;
+}
+
+.period-radios input:checked + span {
+    background-color: white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+
 /* --- 생산 이력 추적 탭 스타일 --- */
 .trace-search-form {
     display: flex;

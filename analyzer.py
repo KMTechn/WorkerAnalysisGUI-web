@@ -43,13 +43,9 @@ class DataAnalyzer:
             ]
             print(f"실시간 로딩: {len(all_log_files)}개 파일만 읽습니다. (경로: {folder_path})")
         else:
-            print(f"전체 데이터 로딩: '{folder_path}' 및 '{os.path.join(folder_path, 'log')}' 하위 폴더를 모두 검색합니다.")
-            main_folder_logs = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
-            log_archive_path = os.path.join(folder_path, 'log')
-            archived_logs = []
-            if os.path.isdir(log_archive_path):
-                archived_logs = glob.glob(os.path.join(log_archive_path, '**', '*작업이벤트로그*.csv'), recursive=True)
-            all_log_files = main_folder_logs + archived_logs
+            print(f"전체 데이터 로딩: '{folder_path}' 및 모든 하위 폴더를 재귀적으로 검색합니다.")
+            search_pattern = os.path.join(folder_path, '**', '*작업이벤트로그*.csv')
+            all_log_files = glob.glob(search_pattern, recursive=True)
             print(f"총 {len(all_log_files)}개의 로그 파일 발견.")
 
         if process_mode == '포장실':

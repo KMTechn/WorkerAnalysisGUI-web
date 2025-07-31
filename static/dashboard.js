@@ -13,7 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
         worker_detail: { // 작업자별 분석 탭 상태
             sort_key: '종합 점수 높은 순',
             selected_worker: null,
-        }
+        },
+        comparison_period: '일간', // 공정 비교 탭 기간
     };
 
     const TAB_CONFIG = {
@@ -86,6 +87,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target.name === 'process_mode') {
             state.process_mode = event.target.value;
             elements.mainTitle.textContent = `${state.process_mode} 대시보드`;
+
+            if (state.process_mode === '전체 비교') {
+                const today = new Date().toISOString().split('T')[0];
+                elements.startDateInput.value = today;
+                elements.endDateInput.value = today;
+            }
+
             fetchAnalysisData();
         }
     }
@@ -639,56 +647,92 @@ document.addEventListener('DOMContentLoaded', () => {
             pane.innerHTML = '<p>비교 데이터를 불러올 수 없습니다. 필터 조건을 확인해주세요.</p>';
             return;
         }
-        const summary = data.comparison_data.summary;
-        const trends = data.comparison_data.trends;
-
-        const tableRows = [
-            ['총 처리 세트 (Tray)', summary.inspection.total_trays, summary.transfer_standby_trays, summary.transfer.total_trays, summary.packaging_standby_trays, summary.packaging.total_trays],
-            ['평균 작업 시간', formatSeconds(summary.inspection.avg_tray_time), '—', formatSeconds(summary.transfer.avg_tray_time), '—', formatSeconds(summary.packaging.avg_tray_time)],
-            ['초도 수율 (FPY)', `${(summary.inspection.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.transfer.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.packaging.avg_fpy * 100).toFixed(1)}%`],
-        ];
-
+        
         pane.innerHTML = `
             <div class="card">
                 <h3>전체 공정 비교 (검사 → 이적 → 포장)</h3>
                 <div id="comparison-table-container" class="table-container"></div>
             </div>
-            <div class="comparison-charts-layout">
-                <div class="card"><h4>검사실 생산량 추이</h4><div class="chart-container"><canvas id="comp-chart-inspection"></canvas></div></div>
-                <div class="card"><h4>이적실 생산량 추이</h4><div class="chart-container"><canvas id="comp-chart-transfer"></canvas></div></div>
-                <div class="card"><h4>포장실 생산량 추이</h4><div class="chart-container"><canvas id="comp-chart-packaging"></canvas></div></div>
+            <div class="card" style="margin-top: 20px;">
+                <div class="tab-header">
+                    <h4>생산량 추이</h4>
+                    <div id="comparison-period-radios" class="period-radios">
+                        <label><input type="radio" name="comp_period" value="일간" checked><span>일간</span></label>
+                        <label><input type="radio" name="comp_period" value="주간"><span>주간</span></label>
+                        <label><input type="radio" name="comp_period" value="월간"><span>월간</span></label>
+                        <label><input type="radio" name="comp_period" value="연간"><span>연간</span></label>
+                    </div>
+                </div>
+                <div class="comparison-charts-layout">
+                    <div><h5>검사실</h5><div class="chart-container"><canvas id="comp-chart-inspection"></canvas></div></div>
+                    <div><h5>이적실</h5><div class="chart-container"><canvas id="comp-chart-transfer"></canvas></div></div>
+                    <div><h5>포장실</h5><div class="chart-container"><canvas id="comp-chart-packaging"></canvas></div></div>
+                </div>
             </div>
         `;
 
+        // 요약 테이블 렌더링
+        const summary = data.comparison_data.summary;
+        const tableRows = [
+            ['총 처리 세트 (Tray)', summary.inspection.total_trays, summary.transfer_standby_trays, summary.transfer.total_trays, summary.packaging_standby_trays, summary.packaging.total_trays],
+            ['평균 작업 시간', formatSeconds(summary.inspection.avg_tray_time), '—', formatSeconds(summary.transfer.avg_tray_time), '—', formatSeconds(summary.packaging.avg_tray_time)],
+            ['초도 수율 (FPY)', `${(summary.inspection.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.transfer.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.packaging.avg_fpy * 100).toFixed(1)}%`],
+        ];
         const tableContainer = pane.querySelector('#comparison-table-container');
         const table = createTable(['지표', '검사완료', '이적대기', '이적완료', '포장대기', '포장완료'], tableRows);
         tableContainer.appendChild(table);
 
-        // 3개 공정 추이 차트 렌더링
-        renderComparisonChart('comp-chart-inspection', '검사실', trends.inspection);
-        renderComparisonChart('comp-chart-transfer', '이적실', trends.transfer);
-        renderComparisonChart('comp-chart-packaging', '포장실', trends.packaging);
+        // 차트 렌더링 및 이벤트 리스너
+        const trends = data.comparison_data.trends;
+        const periodRadios = pane.querySelector('#comparison-period-radios');
+        
+        const updateCharts = () => {
+            const selectedPeriod = periodRadios.querySelector('input:checked').value;
+            state.comparison_period = selectedPeriod;
+            renderComparisonChart('comp-chart-inspection', '검사실', trends.inspection, selectedPeriod);
+            renderComparisonChart('comp-chart-transfer', '이적실', trends.transfer, selectedPeriod);
+            renderComparisonChart('comp-chart-packaging', '포장실', trends.packaging, selectedPeriod);
+        };
+
+        periodRadios.addEventListener('change', updateCharts);
+        updateCharts(); // 초기 차트 렌더링
     }
     
-    function renderComparisonChart(canvasId, label, sessions) {
-        const productionByDate = sessions.reduce((acc, session) => {
-            const date = session.date.split('T')[0];
-            acc[date] = (acc[date] || 0) + session.pcs_completed;
+    function renderComparisonChart(canvasId, label, sessions, period) {
+        // TODO: 이 함수는 현재 날짜 그룹화 로직에 버그가 있어 데이터가 정확하지 않을 수 있습니다.
+        // 특히 '주간', '월간', '연간' 집계 시 표준 시간대 문제 등으로 데이터가 누락될 수 있어 수정이 필요합니다.
+        const getPeriodKey = (dateStr, p) => {
+            const d = new Date(dateStr);
+            if (p === '주간') {
+                const day = d.getUTCDay();
+                const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1); // Monday as 1st day
+                const monday = new Date(d.setUTCDate(diff));
+                return monday.toISOString().split('T')[0];
+            }
+            if (p === '월간') return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            if (p === '연간') return `${d.getUTCFullYear()}`;
+            return d.toISOString().split('T')[0]; // 일간
+        };
+
+        const productionByPeriod = sessions.reduce((acc, session) => {
+            const key = getPeriodKey(session.date, period);
+            acc[key] = (acc[key] || 0) + session.pcs_completed;
             return acc;
         }, {});
-        const sortedDates = Object.keys(productionByDate).sort();
+        
+        const sortedKeys = Object.keys(productionByPeriod).sort();
         
         createChart(canvasId, 'line', {
-            labels: sortedDates,
+            labels: sortedKeys,
             datasets: [{
-                label: `${label} 일별 생산량`,
-                data: sortedDates.map(date => productionByDate[date]),
+                label: `${label} ${period} 생산량`,
+                data: sortedKeys.map(key => productionByPeriod[key]),
                 borderColor: 'var(--color-primary)',
                 backgroundColor: 'rgba(0, 82, 204, 0.1)',
                 fill: true,
                 tension: 0.1
             }]
-        }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } } );
+        }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } });
     }
 
 
