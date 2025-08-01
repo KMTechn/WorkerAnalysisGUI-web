@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>성과 분석 대시보드</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
@@ -45,7 +48,7 @@
                     <input type="date" id="end-date-input">
                 </div>
 
-                <div class="filter-group">
+                <div class="filter-group filter-group-expand">
                     <label for="worker-list" class="filter-label">작업자 선택</label>
                     <div class="listbox-container">
                         <select id="worker-list" multiple></select>

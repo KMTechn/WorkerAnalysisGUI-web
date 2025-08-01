@@ -129,31 +129,45 @@ def get_analysis_data():
         # 공정 비교 분석 데이터 계산
         comparison_data = None
         if process_mode == '전체 비교':
-            # 사용자가 선택한 기간으로 먼저 전체 데이터를 필터링합니다.
-            date_filtered_df = analyzer.filter_data(full_df.copy(), start_date, end_date, all_workers)
+            # 1. 요약 테이블용 데이터 (오늘 날짜 기준)
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            today_df = analyzer.filter_data(full_df.copy(), today_str, today_str, all_workers)
+            
+            today_inspection_kpis = analyzer._calculate_kpis(today_df[today_df['process'] == '검사실'])
+            today_transfer_kpis = analyzer._calculate_kpis(today_df[today_df['process'] == '이적실'])
+            today_packaging_kpis = analyzer._calculate_kpis(today_df[today_df['process'] == '포장실'])
 
-            inspection_df = date_filtered_df[date_filtered_df['process'] == '검사실'].copy()
-            transfer_df = date_filtered_df[date_filtered_df['process'] == '이적실'].copy()
-            packaging_df = date_filtered_df[date_filtered_df['process'] == '포장실'].copy()
-
-            inspection_kpis = analyzer._calculate_kpis(inspection_df)
-            transfer_kpis = analyzer._calculate_kpis(transfer_df)
-            packaging_kpis = analyzer._calculate_kpis(packaging_df)
-
-            comparison_data = {
-                'summary': {
-                    'inspection': inspection_kpis,
-                    'transfer': transfer_kpis,
-                    'packaging': packaging_kpis,
-                    'transfer_standby_trays': inspection_kpis.get('total_trays', 0) - transfer_kpis.get('total_trays', 0),
-                    'packaging_standby_trays': transfer_kpis.get('total_trays', 0) - packaging_kpis.get('total_trays', 0),
-                },
-                'trends': {
-                    'inspection': json.loads(inspection_df.to_json(orient='records', date_format='iso')),
-                    'transfer': json.loads(transfer_df.to_json(orient='records', date_format='iso')),
-                    'packaging': json.loads(packaging_df.to_json(orient='records', date_format='iso')),
-                }
+            summary_today = {
+                'inspection': today_inspection_kpis,
+                'transfer': today_transfer_kpis,
+                'packaging': today_packaging_kpis,
+                'transfer_standby_trays': today_inspection_kpis.get('total_trays', 0) - today_transfer_kpis.get('total_trays', 0),
+                'packaging_standby_trays': today_transfer_kpis.get('total_trays', 0) - today_packaging_kpis.get('total_trays', 0),
             }
+
+            # 2. 요약 테이블용 데이터 (사용자 선택 기간 기준)
+            period_df = analyzer.filter_data(full_df.copy(), start_date, end_date, all_workers)
+            
+            period_inspection_kpis = analyzer._calculate_kpis(period_df[period_df['process'] == '검사실'])
+            period_transfer_kpis = analyzer._calculate_kpis(period_df[period_df['process'] == '이적실'])
+            period_packaging_kpis = analyzer._calculate_kpis(period_df[period_df['process'] == '포장실'])
+
+            summary_period = {
+                'inspection': period_inspection_kpis,
+                'transfer': period_transfer_kpis,
+                'packaging': period_packaging_kpis,
+                'transfer_standby_trays': period_inspection_kpis.get('total_trays', 0) - period_transfer_kpis.get('total_trays', 0),
+                'packaging_standby_trays': period_transfer_kpis.get('total_trays', 0) - period_packaging_kpis.get('total_trays', 0),
+            }
+
+            # 3. 추세 그래프용 데이터 (사용자 선택 기��� 기준)
+            trends_data = {
+                'inspection': json.loads(period_df[period_df['process'] == '검사실'].to_json(orient='records', date_format='iso')),
+                'transfer': json.loads(period_df[period_df['process'] == '이적실'].to_json(orient='records', date_format='iso')),
+                'packaging': json.loads(period_df[period_df['process'] == '포장실'].to_json(orient='records', date_format='iso')),
+            }
+            
+            comparison_data = {'summary_today': summary_today, 'summary_period': summary_period, 'trends': trends_data}
 
         return jsonify({
             'kpis': kpis,
@@ -267,4 +281,4 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     print("Flask 서버를 시작합니다. http://127.0.0.1:8088 에서 접속하세요.")
-    socketio.run(app, port=8088, debug=True, use_reloader=False)
+    socketio.run(app, port=8089, debug=True, use_reloader=False)

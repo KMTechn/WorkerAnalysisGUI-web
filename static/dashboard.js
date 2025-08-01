@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const RADAR_METRICS_CONFIG = {
         "포장실": { '세트완료시간': 'avg_work_time', '첫스캔준비성': 'avg_latency', '무결점달성률': 'first_pass_yield', '세트당PCS': 'avg_pcs_per_tray' },
         "이적실": { '신속성': 'avg_work_time', '준비성': 'avg_latency', '초도수율': 'first_pass_yield', '안정성': 'work_time_std' },
-        "검사실": { '신속성': 'avg_work_time', '준비성': 'avg_latency', '무결점달성률': 'first_pass_yield', '안정성': 'work_time_std', '품질 정확도': 'defect_rate' }
+        "검사실": { '신속성': 'avg_work_time', '준속성': 'avg_latency', '무결점달성률': 'first_pass_yield', '안정성': 'work_time_std', '품질 정확도': 'defect_rate' }
     };
     RADAR_METRICS_CONFIG['전체 비교'] = RADAR_METRICS_CONFIG['이적실'];
 
@@ -87,13 +87,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target.name === 'process_mode') {
             state.process_mode = event.target.value;
             elements.mainTitle.textContent = `${state.process_mode} 대시보드`;
-
-            if (state.process_mode === '전체 비교') {
-                const today = new Date().toISOString().split('T')[0];
-                elements.startDateInput.value = today;
-                elements.endDateInput.value = today;
-            }
-
             fetchAnalysisData();
         }
     }
@@ -125,6 +118,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
     async function fetchAnalysisData() {
         toggleLoading(true);
+        elements.tabsContainer.innerHTML = '';
+        elements.tabContentContainer.innerHTML = '<div class="card"><p>데이터를 분석하고 있습니다. 잠시만 기다려 주세요...</p></div>';
+
         state.start_date = elements.startDateInput.value;
         state.end_date = elements.endDateInput.value;
         state.selected_workers = Array.from(elements.workerList.selectedOptions).map(opt => opt.value);
@@ -141,12 +137,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 }),
             });
             if (!response.ok) throw new Error((await response.json()).error || `HTTP Error: ${response.status}`);
+            
             const data = await response.json();
             state.full_data = data;
             updateDashboard(data);
+
         } catch (error) {
             console.error('데이터 분석 중 오류 발생:', error);
-            alert(`데이터를 불러오는 데 실패했습니다: ${error.message}`);
+            elements.tabContentContainer.innerHTML = `<div class="card"><p style="color: var(--color-danger);">데이터를 불러오는 데 실패했습니다: ${error.message}</p></div>`;
         } finally {
             toggleLoading(false);
         }
@@ -253,7 +251,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
 
     async function renderRealtimeTab(pane) {
-        pane.innerHTML = `
+        pane.appendChild(createTabHeader('실시간 현황 (오늘)', [], () => renderActiveTabData()));
+        
+        const content = document.createElement('div');
+        pane.appendChild(content);
+        content.innerHTML = `
             <div class="kpi-grid">
                 <div id="realtime-worker-status" class="card"></div>
                 <div id="realtime-item-status" class="card"></div>
@@ -266,12 +268,12 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const realtimeData = await fetchRealtimeData();
         if (!realtimeData) {
-            pane.innerHTML = '<p>실시간 데이터를 불러오는 데 실패했습니다.</p>';
+            content.innerHTML = '<p>실시간 데이터를 불러오는 데 실패했습니다.</p>';
             return;
         }
 
-        const workerStatusEl = pane.querySelector('#realtime-worker-status');
-        workerStatusEl.innerHTML = '<h3>작업자별 실시간 현황 (오늘)</h3>';
+        const workerStatusEl = content.querySelector('#realtime-worker-status');
+        workerStatusEl.innerHTML = '<h3>작업자별 현황</h3>';
         if(realtimeData.worker_status.length > 0) {
             const workerTable = createTable(
                 ['작업자', '총 PCS', '평균 시간(초)', '세트 수'],
@@ -282,8 +284,8 @@ document.addEventListener('DOMContentLoaded', () => {
             workerStatusEl.innerHTML += '<p>데이터 없음</p>';
         }
 
-        const itemStatusEl = pane.querySelector('#realtime-item-status');
-        itemStatusEl.innerHTML = '<h3>품목별 실시간 현황 (오늘)</h3>';
+        const itemStatusEl = content.querySelector('#realtime-item-status');
+        itemStatusEl.innerHTML = '<h3>품목별 현황</h3>';
         if(realtimeData.item_status.length > 0) {
             const itemTable = createTable(
                 ['품목', '생산량 (PCS)'],
@@ -297,7 +299,7 @@ document.addEventListener('DOMContentLoaded', () => {
         createChart('realtime-hourly-chart', 'bar', {
             labels: realtimeData.hourly_production.labels,
             datasets: [{
-                label: '오늘 생산량',
+                label: '시간대별 생산량',
                 data: realtimeData.hourly_production.data,
                 backgroundColor: 'rgba(0, 82, 204, 0.6)',
             }]
@@ -305,7 +307,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderProductionTab(pane, data) {
-        pane.innerHTML = `
+        pane.appendChild(createTabHeader(state.active_tab));
+        const content = document.createElement('div');
+        pane.appendChild(content);
+
+        content.innerHTML = `
             <div class="kpi-grid">
                 ${createCard('평균 트레이 작업시간', formatSeconds(data.kpis.avg_tray_time || 0))}
                 ${createCard('평균 작업 준비시간', formatSeconds(data.kpis.avg_latency || 0))}
@@ -337,12 +343,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderWorkerDetailTab(pane, data) {
+        pane.appendChild(createTabHeader('작업자별 분석'));
+        const content = document.createElement('div');
+        pane.appendChild(content);
+
         if (!data.worker_data || data.worker_data.length === 0) {
-            pane.innerHTML = '<p>분석할 작업자 데이터가 없습니다.</p>';
+            content.innerHTML = '<p>분석할 작업자 데이터가 없습니다.</p>';
             return;
         }
 
-        pane.innerHTML = `
+        content.innerHTML = `
             <div class="worker-detail-layout">
                 <div class="worker-list-pane card">
                     <div class="filter-group">
@@ -363,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </div>`;
 
-        const sortSelect = pane.querySelector('#worker-sort-select');
+        const sortSelect = content.querySelector('#worker-sort-select');
         sortSelect.value = state.worker_detail.sort_key;
         sortSelect.addEventListener('change', (e) => {
             state.worker_detail.sort_key = e.target.value;
@@ -492,15 +502,22 @@ document.addEventListener('DOMContentLoaded', () => {
             event.event.toLowerCase().includes('cancel'))
         ).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-        pane.innerHTML = `
-            <div class="tab-header">
-                <h3>오류 로그</h3>
-                <button id="export-error-csv" class="btn">CSV로 내보내기</button>
-            </div>`;
+        const exportButton = {
+            text: 'CSV로 내보내기',
+            className: 'btn',
+            onClick: () => {
+                if (errorEvents.length > 0) {
+                    exportToCSV(errorEvents, `error_log_${new Date().toISOString().split('T')[0]}.csv`);
+                }
+            }
+        };
+        pane.appendChild(createTabHeader('오류 로그', [exportButton]));
+        
+        const content = document.createElement('div');
+        pane.appendChild(content);
 
         if (errorEvents.length === 0) {
-            pane.innerHTML += '<p>선택된 기간/작업자에 해당하는 오류 기록이 없습니다.</p>';
-            pane.querySelector('#export-error-csv').disabled = true;
+            content.innerHTML = '<p>선택된 기간/작업자에 해당하는 오류 기록이 없습니다.</p>';
             return;
         }
 
@@ -516,15 +533,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const container = document.createElement('div');
         container.className = 'table-container';
         container.appendChild(table);
-        pane.appendChild(container);
-
-        pane.querySelector('#export-error-csv').addEventListener('click', () => {
-            exportToCSV(errorEvents, `error_log_${new Date().toISOString().split('T')[0]}.csv`);
-        });
+        content.appendChild(container);
     }
 
     function renderTraceabilityTab(pane, data) {
-        pane.innerHTML = `
+        pane.appendChild(createTabHeader('생산 이력 추적'));
+        const content = document.createElement('div');
+        pane.appendChild(content);
+
+        content.innerHTML = `
             <div class="card">
                 <div class="trace-search-form">
                     <div class="form-group">
@@ -551,18 +568,17 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
-        const searchBtn = pane.querySelector('#trace-search-btn');
-        const resetBtn = pane.querySelector('#trace-reset-btn');
+        const searchBtn = content.querySelector('#trace-search-btn');
+        const resetBtn = content.querySelector('#trace-reset-btn');
         
         searchBtn.addEventListener('click', performTraceSearch);
         resetBtn.addEventListener('click', () => {
-            pane.querySelector('#trace-wid').value = '';
-            pane.querySelector('#trace-fpb').value = '';
-            pane.querySelector('#trace-barcode').value = '';
+            content.querySelector('#trace-wid').value = '';
+            content.querySelector('#trace-fpb').value = '';
+            content.querySelector('#trace-barcode').value = '';
             performTraceSearch();
         });
 
-        // 초기 로드 시 전체 세션 표시
         performTraceSearch();
     }
 
@@ -623,7 +639,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function renderFullDataTableTab(pane, data) {
-        pane.innerHTML = '<h3>상세 데이터</h3>';
+        pane.appendChild(createTabHeader('상세 데이터'));
+        const content = document.createElement('div');
+        pane.appendChild(content);
+
         const table = createTable(
             ['날짜', '작업자', '공정', '품목', '작업시간', '완료수량', '오류'],
             data.filtered_sessions_data.map(s => [
@@ -639,7 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const container = document.createElement('div');
         container.className = 'table-container';
         container.appendChild(table);
-        pane.appendChild(container);
+        content.appendChild(container);
     }
 
     function renderComparisonTab(pane, data) {
@@ -650,12 +669,18 @@ document.addEventListener('DOMContentLoaded', () => {
         
         pane.innerHTML = `
             <div class="card">
-                <h3>전체 공정 비교 (검사 → 이적 → 포장)</h3>
+                <div class="tab-header">
+                    <h3>전체 공정 비교 (검사 → 이적 → 포장)</h3>
+                    <div id="comparison-summary-period-radios" class="period-radios">
+                        <label><input type="radio" name="comp_summary_period" value="today" checked><span>당일</span></label>
+                        <label><input type="radio" name="comp_summary_period" value="period"><span>선택 기간</span></label>
+                    </div>
+                </div>
                 <div id="comparison-table-container" class="table-container"></div>
             </div>
             <div class="card" style="margin-top: 20px;">
                 <div class="tab-header">
-                    <h4>생산량 추이</h4>
+                    <h4>생산량 추이 (선택 기간)</h4>
                     <div id="comparison-period-radios" class="period-radios">
                         <label><input type="radio" name="comp_period" value="일간" checked><span>일간</span></label>
                         <label><input type="radio" name="comp_period" value="주간"><span>주간</span></label>
@@ -671,18 +696,29 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
-        // 요약 테이블 렌더링
-        const summary = data.comparison_data.summary;
-        const tableRows = [
-            ['총 처리 세트 (Tray)', summary.inspection.total_trays, summary.transfer_standby_trays, summary.transfer.total_trays, summary.packaging_standby_trays, summary.packaging.total_trays],
-            ['평균 작업 시간', formatSeconds(summary.inspection.avg_tray_time), '—', formatSeconds(summary.transfer.avg_tray_time), '—', formatSeconds(summary.packaging.avg_tray_time)],
-            ['초도 수율 (FPY)', `${(summary.inspection.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.transfer.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.packaging.avg_fpy * 100).toFixed(1)}%`],
-        ];
-        const tableContainer = pane.querySelector('#comparison-table-container');
-        const table = createTable(['지표', '검사완료', '이적대기', '이적완료', '포장대기', '포장완료'], tableRows);
-        tableContainer.appendChild(table);
+        const renderSummaryTable = (summaryType) => {
+            const summary = (summaryType === 'today') 
+                ? data.comparison_data.summary_today 
+                : data.comparison_data.summary_period;
 
-        // 차트 렌더링 및 이벤트 리스너
+            const tableRows = [
+                ['총 처리 세트 (Tray)', summary.inspection.total_trays, summary.transfer_standby_trays, summary.transfer.total_trays, summary.packaging_standby_trays, summary.packaging.total_trays],
+                ['평균 작업 시간', formatSeconds(summary.inspection.avg_tray_time), '—', formatSeconds(summary.transfer.avg_tray_time), '—', formatSeconds(summary.packaging.avg_tray_time)],
+                ['초도 수율 (FPY)', `${(summary.inspection.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.transfer.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.packaging.avg_fpy * 100).toFixed(1)}%`],
+            ];
+            const tableContainer = pane.querySelector('#comparison-table-container');
+            tableContainer.innerHTML = ''; // 기존 테이블 삭제
+            const table = createTable(['지표', '검사완료', '이적대기', '이적완료', '포장대기', '포장완료'], tableRows);
+            tableContainer.appendChild(table);
+        };
+        
+        const summaryPeriodRadios = pane.querySelector('#comparison-summary-period-radios');
+        summaryPeriodRadios.addEventListener('change', (e) => {
+            renderSummaryTable(e.target.value);
+        });
+
+        renderSummaryTable('today');
+
         const trends = data.comparison_data.trends;
         const periodRadios = pane.querySelector('#comparison-period-radios');
         
@@ -695,23 +731,21 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         periodRadios.addEventListener('change', updateCharts);
-        updateCharts(); // 초기 차트 렌더링
+        updateCharts();
     }
     
     function renderComparisonChart(canvasId, label, sessions, period) {
-        // TODO: 이 함수는 현재 날짜 그룹화 로직에 버그가 있어 데이터가 정확하지 않을 수 있습니다.
-        // 특히 '주간', '월간', '연간' 집계 시 표준 시간대 문제 등으로 데이터가 누락될 수 있어 수정이 필요합니다.
         const getPeriodKey = (dateStr, p) => {
             const d = new Date(dateStr);
             if (p === '주간') {
                 const day = d.getUTCDay();
-                const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1); // Monday as 1st day
+                const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1);
                 const monday = new Date(d.setUTCDate(diff));
                 return monday.toISOString().split('T')[0];
             }
             if (p === '월간') return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
             if (p === '연간') return `${d.getUTCFullYear()}`;
-            return d.toISOString().split('T')[0]; // 일간
+            return d.toISOString().split('T')[0];
         };
 
         const productionByPeriod = sessions.reduce((acc, session) => {
@@ -739,6 +773,36 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
     // ### 유틸리티 함수 ###
     // ########################
+    function createTabHeader(title, buttons = [], refreshFn = fetchAnalysisData) {
+        const header = document.createElement('div');
+        header.className = 'tab-header';
+        
+        const h3 = document.createElement('h3');
+        h3.textContent = title;
+        header.appendChild(h3);
+
+        const buttonContainer = document.createElement('div');
+        buttonContainer.className = 'tab-header-actions';
+        
+        buttons.forEach(btnConfig => {
+            const btn = document.createElement('button');
+            btn.className = btnConfig.className || 'btn';
+            btn.textContent = btnConfig.text;
+            btn.onclick = btnConfig.onClick;
+            if (btnConfig.id) btn.id = btnConfig.id;
+            buttonContainer.appendChild(btn);
+        });
+
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'btn btn-secondary';
+        refreshBtn.innerHTML = '🔄&#xFE0E; 새로고침'; // Emoji with variation selector
+        refreshBtn.onclick = refreshFn;
+        buttonContainer.appendChild(refreshBtn);
+
+        header.appendChild(buttonContainer);
+        return header;
+    }
+
     function createChart(canvasId, type, data, options) {
         const ctx = document.getElementById(canvasId)?.getContext('2d');
         if (!ctx) return;
