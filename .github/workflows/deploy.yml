@@ -21,7 +21,7 @@ jobs:
         username: ${{ secrets.SERVER_USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
-          # 프로젝트 디렉토리로 이동 (실제 서버 경로에 맞게 수정 필요)
-          cd /path/to/your/project/WorkerAnalysisGUI-web
+          # 프로젝트 디렉토리로 이동
+          cd "/c/KMTECH Program/WorkerAnalysisGUI-web"
           # 배포 스크립트 실행
           bash deploy.sh
