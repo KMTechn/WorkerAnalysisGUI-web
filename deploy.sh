@@ -21,11 +21,19 @@ git pull origin main
 echo "필요한 라이브러리를 설치하는 중..."
 pip install -r requirements.txt
 
-# 5. 웹 서버 재시작
-# Gunicorn이나 다른 WSGI 서버를 사용하는 경우 해당 프로세스를 재시작합니다.
-# 여기서는 간단하게 pkill로 기존 python 프로세스를 종료하고 백그라운드에서 새로 시작합니다.
-echo "웹 서버를 재시작하는 중..."
-pkill -f "python app.py" || true
-nohup python app.py > server.log 2>&1 &
+# 5. 웹 서버 재시작 (더 안정적인 방식으로 변경)
+PID_FILE="app.pid"
 
-echo "배포가 성공적으로 완료되었습니다."
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    echo "기존 서버 프로세스(PID: $PID)를 종료합니다."
+    # kill 명령어에 -9 옵션을 사용하여 프로세스를 확실히 종료
+    kill -9 $PID || true
+    rm -f "$PID_FILE"
+fi
+
+echo "��로운 웹 서버를 시작합니다."
+# nohup을 사용하여 백그라운드에서 실행하고, 프로세스 ID를 파일에 저장
+nohup python app.py > server.log 2>&1 & echo $! > $PID_FILE
+
+echo "배포가 성공적으로 완료되었습니다. (PID: $(cat $PID_FILE))"
