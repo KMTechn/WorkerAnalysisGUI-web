@@ -143,6 +143,8 @@ def get_analysis_data():
                 'packaging': today_packaging_kpis,
                 'transfer_standby_trays': today_inspection_kpis.get('total_trays', 0) - today_transfer_kpis.get('total_trays', 0),
                 'packaging_standby_trays': today_transfer_kpis.get('total_trays', 0) - today_packaging_kpis.get('total_trays', 0),
+                'transfer_standby_pcs': today_inspection_kpis.get('total_pcs_completed', 0) - today_transfer_kpis.get('total_pcs_completed', 0),
+                'packaging_standby_pcs': today_transfer_kpis.get('total_pcs_completed', 0) - today_packaging_kpis.get('total_pcs_completed', 0),
             }
 
             # 2. 요약 테이블용 데이터 (사용자 선택 기간 기준)
@@ -158,6 +160,8 @@ def get_analysis_data():
                 'packaging': period_packaging_kpis,
                 'transfer_standby_trays': period_inspection_kpis.get('total_trays', 0) - period_transfer_kpis.get('total_trays', 0),
                 'packaging_standby_trays': period_transfer_kpis.get('total_trays', 0) - period_packaging_kpis.get('total_trays', 0),
+                'transfer_standby_pcs': period_inspection_kpis.get('total_pcs_completed', 0) - period_transfer_kpis.get('total_pcs_completed', 0),
+                'packaging_standby_pcs': period_transfer_kpis.get('total_pcs_completed', 0) - period_packaging_kpis.get('total_pcs_completed', 0),
             }
 
             # 3. 추세 그래프용 데이터 (사용자 선택 기��� 기준)
@@ -231,6 +235,111 @@ def trace_data():
         import traceback
         traceback.print_exc()
         return jsonify({"error": f"이력 추적 중 오류: {e}"}), 500
+
+@app.route('/api/session_barcodes', methods=['POST'])
+def get_session_barcodes():
+    try:
+        session_info = request.json
+        start_time = pd.to_datetime(session_info['start_time_dt'])
+        end_time = pd.to_datetime(session_info['end_time_dt'])
+        worker = session_info['worker']
+        process = session_info['process']
+
+        raw_df = analyzer.raw_event_df
+        if raw_df.empty:
+            return jsonify({"barcodes": []})
+
+        session_scans = raw_df[
+            (raw_df['timestamp'] >= start_time) &
+            (raw_df['timestamp'] <= end_time) &
+            (raw_df['worker'] == worker) &
+            (raw_df['process'] == process) &
+            (raw_df['event'] == 'SCAN_OK')
+        ].copy()
+
+        barcodes = []
+        if not session_scans.empty:
+            for detail_str in session_scans['details']:
+                try:
+                    if isinstance(detail_str, str) and detail_str.strip().startswith('{'):
+                        detail_dict = json.loads(detail_str)
+                        if 'barcode' in detail_dict:
+                            barcodes.append(detail_dict['barcode'])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        
+        return jsonify({"barcodes": barcodes})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"바코드 조회 중 오류: {e}"}), 500
+
+@app.route('/api/export_excel', methods=['POST'])
+def export_excel():
+    try:
+        from io import BytesIO
+        import pandas as pd
+        from flask import send_file
+
+        data = request.json
+        sessions_data = data.get('sessions', [])
+        
+        if not sessions_data:
+            return jsonify({"error": "내보낼 데이터가 없습니다."}), 400
+
+        df = pd.DataFrame(sessions_data)
+        
+        # 데이터 정제 및 컬럼 선택 (필요에 따라 조정)
+        df_display = df.sort_values(by='start_time_dt', ascending=False).copy()
+        df_display['날짜'] = pd.to_datetime(df_display['date']).dt.strftime('%Y-%m-%d')
+        df_display['시작 시간'] = pd.to_datetime(df_display['start_time_dt']).dt.strftime('%H:%M:%S').fillna('N/A')
+        if 'shipping_date' in df_display.columns:
+            df_display['출고 날짜'] = pd.to_datetime(df_display['shipping_date']).dt.strftime('%Y-%m-%d').fillna('')
+        df_display['작업시간'] = df_display['work_time'].apply(lambda x: f"{x:.1f}초" if pd.notna(x) else "N/A")
+        df_display['준비시간'] = df_display['latency'].apply(lambda x: f"{x:.1f}초" if pd.notna(x) else "N/A")
+        df_display['오류수'] = df_display['process_errors'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
+        df_display['오류 발생 여부'] = df_display['had_error'].apply(lambda x: '예' if x == 1 else '아니오')
+        
+        def format_pcs_pallets(row):
+            pcs = row['pcs_completed']
+            process = row['process']
+            if pd.notna(pcs) and pcs > 0:
+                if '포장' in process:
+                    pallets = pcs / 60.0
+                    return f"{int(pcs):,} ({pallets:.1f} PL)"
+                return f"{int(pcs):,}"
+            return "N/A"
+        df_display['수량 (PCS/Pallet)'] = df_display.apply(format_pcs_pallets, axis=1)
+
+        cols_to_display = [
+            '날짜', '시작 시간', 'worker', 'process', 'phase', 'item_display',
+            'work_order_id', 'product_batch',
+            '작업시간', '준비시간', '수량 (PCS/Pallet)', '오류수', '오류 발생 여부'
+        ]
+        if 'shipping_date' in df_display.columns and '출고 날짜' in df_display.columns:
+            cols_to_display.insert(2, '출고 날짜')
+
+        header_map = {
+            'worker': '작업자', 'process': '공정', 'item_display': '품목',
+            'work_order_id': '작업지시 ID', 'phase': '차수', 'product_batch': '완제품 배치'
+        }
+        
+        final_cols_to_display = [col for col in cols_to_display if col in df_display.columns]
+        export_df = df_display[final_cols_to_display].rename(columns=header_map)
+
+        output = BytesIO()
+        writer = pd.ExcelWriter(output, engine='openpyxl')
+        export_df.to_excel(writer, index=False, sheet_name='상세 데이터')
+        writer.close()
+        output.seek(0)
+
+        return send_file(output, download_name="상세_데이터.xlsx", as_attachment=True, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Excel 내보내기 중 오류: {e}"}), 500
 
 
 @app.route('/api/realtime', methods=['GET'])

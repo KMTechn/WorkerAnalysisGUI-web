@@ -44,9 +44,13 @@ class DataAnalyzer:
             ]
             print(f"실시간 로딩: {len(all_log_files)}개 파일만 읽습니다. (경로: {folder_path})")
         else:
-            print(f"전체 데이터 로딩: '{folder_path}' 및 모든 하위 폴더를 재귀적으로 검색합니다.")
-            search_pattern = os.path.join(folder_path, '**', '*작업이벤트로그*.csv')
-            all_log_files = glob.glob(search_pattern, recursive=True)
+            print(f"전체 데이터 로딩: '{folder_path}' 및 '{os.path.join(folder_path, 'log')}' 하위 폴더를 모두 검색합니다.")
+            main_folder_logs = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
+            log_archive_path = os.path.join(folder_path, 'log')
+            archived_logs = []
+            if os.path.isdir(log_archive_path):
+                archived_logs = glob.glob(os.path.join(log_archive_path, '**', '*작업이벤트로그*.csv'), recursive=True)
+            all_log_files = main_folder_logs + archived_logs
             print(f"총 {len(all_log_files)}개의 로그 파일 발견.")
 
         if process_mode == '포장실':
@@ -82,12 +86,7 @@ class DataAnalyzer:
                     current_process = "이적실"
                 elif '포장실작업이벤트로그' in filename:
                     current_process = "포장실"
-                    # --- 디버깅 코드 시작 ---
-                    if 'event' in df.columns:
-                        unique_events = df['event'].unique().tolist()
-                        print(f"DEBUG: 포장실 로그 파일 '{filename}'의 고유 이벤트: {unique_events}")
-                    # --- 디버깅 코드 끝 ---
-                elif '���사작업이벤트로그' in filename:
+                elif '검사작업이벤트로그' in filename:
                     current_process = "검사실"
                 else:
                     continue
@@ -118,6 +117,7 @@ class DataAnalyzer:
                 df.dropna(subset=['timestamp'], inplace=True)
                 if df.empty: continue
                 
+                # `details` 파싱 로직을 `process_events_to_sessions`로 이동
                 if not df.empty: all_event_data_dfs.append(df)
 
             except Exception as e:
@@ -139,17 +139,30 @@ class DataAnalyzer:
         if completed_trays_df.empty: return pd.DataFrame()
 
         def _parse_details(detail_data):
-            if isinstance(detail_data, dict): return detail_data
-            if not isinstance(detail_data, str): return {}
+            """JSON과 새로운 QR 형식(key=value|...)을 모두 처리하는 헬퍼 함수"""
+            if isinstance(detail_data, dict):
+                return detail_data # 이미 dict 형태이면 그대로 반환
+            if not isinstance(detail_data, str):
+                return {}
+
+            # 1. JSON 파싱 시도
             try:
-                if detail_data.strip().startswith('{'): return json.loads(detail_data)
-            except (json.JSONDecodeError, TypeError): pass
+                if detail_data.strip().startswith('{'):
+                    return json.loads(detail_data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            # 2. QR 형식 파싱 시도
             try:
                 if '|' in detail_data and '=' in detail_data:
+                    # 'PHS=1|CLC=...' 형식의 데이터를 dict로 변환
                     return dict(item.split('=', 1) for item in detail_data.split('|') if '=' in item)
-            except ValueError: pass
-            return {}
+            except ValueError: # '='가 없는 항목 등으로 인한 오류 방지
+                pass
 
+            return {} # 어떤 형식에도 해당하지 않으면 빈 dict 반환
+
+        # apply를 사용하여 details 컬럼을 일괄적으로 파싱
         completed_trays_df['details'] = completed_trays_df['details'].apply(_parse_details)
 
         def safe_get(d, k, default):
@@ -168,9 +181,12 @@ class DataAnalyzer:
         
         def calculate_pcs(row):
             details = row['details']
-            if row['process'] == '포장실': return 60
-            elif row['process'] == '검사실': return safe_get(details, 'good_count', 0) + safe_get(details, 'defective_count', 0)
-            else: return safe_get(details, 'scan_count', 0)
+            if row['process'] == '포장실':
+                return 60
+            elif row['process'] == '검사실':
+                return safe_get(details, 'good_count', 0) + safe_get(details, 'defective_count', 0)
+            else: # 이적실
+                return safe_get(details, 'scan_count', 0)
 
         pcs_completed_values = completed_trays_df.apply(calculate_pcs, axis=1)
 
@@ -178,16 +194,20 @@ class DataAnalyzer:
             'date': completed_trays_df['start_time_dt'].dt.date,
             'start_time_dt': completed_trays_df['start_time_dt'],
             'end_time_dt': completed_trays_df['timestamp'],
-            'shipping_date': details_series.apply(lambda d: safe_get(d, 'OBD', safe_get(d, 'shipping_date', pd.NaT))),
-            'item_code': details_series.apply(lambda d: safe_get(d, 'CLC', safe_get(d, 'item_code', 'N/A'))),
+            
+            # --- 신규/변경 필드 ---
+            'shipping_date': details_series.apply(lambda d: safe_get(d, 'OBD', safe_get(d, 'shipping_date', pd.NaT))), # OBD 우선
+            'item_code': details_series.apply(lambda d: safe_get(d, 'CLC', safe_get(d, 'item_code', 'N/A'))), # CLC 우선
             'work_order_id': details_series.apply(lambda d: safe_get(d, 'WID', 'N/A')),
             'phase': details_series.apply(lambda d: safe_get(d, 'PHS', 'N/A')),
             'supplier_code': details_series.apply(lambda d: safe_get(d, 'SPC', 'N/A')),
             'product_batch': details_series.apply(lambda d: safe_get(d, 'FPB', 'N/A')),
             'item_group': details_series.apply(lambda d: safe_get(d, 'IG', 'N/A')),
+            
+            # --- 기존 필드 (호환성 유지) ---
             'worker': completed_trays_df['worker'],
             'process': completed_trays_df['process'],
-            'item_name': details_series.apply(lambda d: safe_get(d, 'item_name', '')),
+            'item_name': details_series.apply(lambda d: safe_get(d, 'item_name', '')), # item_name은 기존 유지
             'work_time': details_series.apply(lambda d: float(safe_get(d, 'work_time', safe_get(d, 'work_time_sec', 0.0)))),
             'latency': completed_trays_df['latency'],
             'idle_time': details_series.apply(lambda d: float(safe_get(d, 'idle_time', safe_get(d, 'total_idle_seconds', 0.0)))),
@@ -202,7 +222,6 @@ class DataAnalyzer:
 
         sessions_df['shipping_date'] = pd.to_datetime(sessions_df['shipping_date'], errors='coerce')
         sessions_df['item_display'] = sessions_df['item_name'].astype(str) + " (" + sessions_df['item_code'].astype(str) + ")"
-        sessions_df['date'] = pd.to_datetime(sessions_df['date'], errors='coerce')
         
         return sessions_df
         
@@ -367,6 +386,7 @@ class DataAnalyzer:
             norm_cols_for_score.append(norm_col_name)
             weights.append(weight)
 
+        # 검사실의 불량 탐지율은 높을수록 좋으므로 별도 정규화 (Scatter Plot용)
         if 'defect_rate' in df.columns:
             s = df['defect_rate']
             min_v, max_v = s.min(), s.max()

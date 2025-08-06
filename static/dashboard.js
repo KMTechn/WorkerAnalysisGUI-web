@@ -67,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initialize();
 
     function initialize() {
+        loadFiltersFromStorage();
         bindEventListeners();
         fetchAnalysisData();
     }
@@ -495,6 +496,97 @@ document.addEventListener('DOMContentLoaded', () => {
         tableContainer.appendChild(table);
     }
 
+    function saveFiltersToStorage() {
+        const filters = {
+            process_mode: state.process_mode,
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value,
+            selected_workers: Array.from(elements.workerList.selectedOptions).map(opt => opt.value)
+        };
+        localStorage.setItem('dashboard_filters', JSON.stringify(filters));
+    }
+
+    function loadFiltersFromStorage() {
+        const savedFilters = localStorage.getItem('dashboard_filters');
+        if (savedFilters) {
+            const filters = JSON.parse(savedFilters);
+            state.process_mode = filters.process_mode || '이적실';
+            document.querySelector(`input[name="process_mode"][value="${state.process_mode}"]`).checked = true;
+            elements.startDateInput.value = filters.start_date || '';
+            elements.endDateInput.value = filters.end_date || '';
+            // workerList는 데이터 로드 후 채워지므로 여기서는 state만 업데이트
+            state.selected_workers = filters.selected_workers || [];
+        }
+    }
+
+    function renderWorkerDetails(workerName, data) {
+        const contentPane = document.getElementById('worker-detail-content');
+        const workerPerf = data.worker_data.find(w => w.worker === workerName);
+        const workerNorm = data.normalized_performance.find(w => w.worker === workerName);
+
+        if (!workerPerf || !workerNorm) {
+            contentPane.innerHTML = '<p>선택된 작업자의 상세 데이터를 찾을 수 없습니다.</p>';
+            return;
+        }
+        
+        const bestTimeText = workerPerf.best_work_time_date 
+            ? `(금주 최고: ${formatSeconds(workerPerf.best_work_time)} / ${new Date(workerPerf.best_work_time_date).toLocaleDateString()})`
+            : '';
+
+        contentPane.innerHTML = `
+            <div class="kpi-grid kpi-grid-4-cols">
+                ${createCard('종합 성과 점수', `${workerPerf.overall_score.toFixed(1)} 점`)}
+                ${createCard('평균 작업 시간', formatSeconds(workerPerf.avg_work_time), '', bestTimeText)}
+                ${createCard('평균 준비 시간', formatSeconds(workerPerf.avg_latency))}
+                ${createCard('초도 수율', `${(workerPerf.first_pass_yield * 100).toFixed(1)}%`)}
+            </div>
+            <div class="worker-charts-layout">
+                <div class="card">
+                    <h4>성과 레이더 차트</h4>
+                    <div class="chart-container" style="height: 300px;"><canvas id="worker-radar-chart"></canvas></div>
+                </div>
+                <div class="card">
+                    <h4>품목별 성과</h4>
+                    <div id="item-perf-table-container" class="table-container"></div>
+                </div>
+            </div>`;
+
+        const radarMetrics = RADAR_METRICS_CONFIG[state.process_mode];
+        const labels = Object.keys(radarMetrics);
+        const chartData = labels.map(label => {
+            const metricKey = radarMetrics[label];
+            return (workerNorm[`${metricKey}_norm`] || 0) * 100;
+        });
+
+        createChart('worker-radar-chart', 'radar', {
+            labels: labels,
+            datasets: [{
+                label: workerName,
+                data: chartData,
+                backgroundColor: 'rgba(0, 82, 204, 0.2)',
+                borderColor: 'rgb(0, 82, 204)',
+            }]
+        }, { responsive: true, maintainAspectRatio: false, scales: { r: { beginAtZero: true, max: 100, min: 0 } } });
+
+        const workerSessions = data.filtered_sessions_data.filter(s => s.worker === workerName);
+        const itemPerf = workerSessions.reduce((acc, s) => {
+            const key = `${s.item_display} / ${s.phase || 'N/A'}차`;
+            if (!acc[key]) acc[key] = { times: [], count: 0 };
+            acc[key].times.push(s.work_time);
+            acc[key].count++;
+            return acc;
+        }, {});
+
+        const tableRows = Object.entries(itemPerf).map(([itemName, stats]) => {
+            const avgTime = stats.times.reduce((a, b) => a + b, 0) / stats.times.length;
+            return [itemName, formatSeconds(avgTime), stats.count];
+        });
+
+        const tableContainer = contentPane.querySelector('#item-perf-table-container');
+        const table = createTable(['품목/차수', '평균시간', '처리 세트 수'], tableRows);
+        tableContainer.appendChild(table);
+    }
+
     function renderErrorLogTab(pane, data) {
         const errorEvents = (data.filtered_raw_events || []).filter(event => 
             event.event && (event.event.toLowerCase().includes('error') ||
@@ -619,29 +711,85 @@ document.addEventListener('DOMContentLoaded', () => {
                 ]);
             } else { // session_trace
                 headers = ['공정', '작업자', '작업 시작', '작업 종료', '품목', '완료수량', 'WID', 'FPB'];
-                rows = result.data.map(s => [
-                    s.process,
-                    s.worker,
-                    new Date(s.start_time_dt).toLocaleString(),
-                    new Date(s.end_time_dt).toLocaleString(),
-                    s.item_display,
-                    s.pcs_completed,
-                    s.work_order_id,
-                    s.product_batch
-                ]);
+                rows = result.data.map(s => ({
+                    id: s.start_time_dt, // 고유 ID로 사용
+                    data: [
+                        s.process,
+                        s.worker,
+                        new Date(s.start_time_dt).toLocaleString(),
+                        new Date(s.end_time_dt).toLocaleString(),
+                        s.item_display,
+                        s.pcs_completed,
+                        s.work_order_id,
+                        s.product_batch
+                    ],
+                    rawData: s
+                }));
             }
-            resultsContainer.appendChild(createTable(headers, rows));
+            const table = createTable(headers, rows, true);
+            resultsContainer.appendChild(table);
+
+            // 세션 추적 결과에 더블클릭 이벤트 추가
+            if (result.type === 'session_trace') {
+                table.querySelectorAll('tbody tr').forEach(tr => {
+                    tr.addEventListener('dblclick', async () => {
+                        const sessionData = result.data.find(s => s.start_time_dt === tr.dataset.id);
+                        if (sessionData) {
+                            await showBarcodePopup(sessionData);
+                        }
+                    });
+                });
+            }
 
         } catch (error) {
             resultsContainer.innerHTML = `<p style="color: red;">오류: ${error.message}</p>`;
         }
     }
 
+    async function showBarcodePopup(sessionData) {
+        try {
+            const response = await fetch('/api/session_barcodes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(sessionData)
+            });
+            if (!response.ok) throw new Error('바코드 정보를 가져오는 데 실패했습니다.');
+            const data = await response.json();
+            
+            const modal = createModal('barcode-popup', `제품 바코드 목록 (${sessionData.item_display})`);
+            const content = modal.querySelector('.modal-content');
+            
+            if (data.barcodes && data.barcodes.length > 0) {
+                const barcodeTable = createTable(['#', '바코드'], data.barcodes.map((bc, i) => [i + 1, bc]));
+                content.appendChild(barcodeTable);
+            } else {
+                content.innerHTML = '<p>스캔된 바코드 정보가 없습니다.</p>';
+            }
+            document.body.appendChild(modal);
+
+        } catch (error) {
+            showToast(error.message);
+        }
+    }
+
 
     function renderFullDataTableTab(pane, data) {
-        pane.appendChild(createTabHeader('상세 데이터'));
+        const exportButton = {
+            text: 'Excel로 내보내기',
+            className: 'btn',
+            onClick: () => {
+                const displayedData = state.full_data.filtered_sessions_data; // 현재 필터링된 데이터 사용
+                if (displayedData.length > 0) {
+                    exportToExcel(displayedData, `상세_데이터_${new Date().toISOString().split('T')[0]}.xlsx`);
+                }
+            }
+        };
+        pane.appendChild(createTabHeader('상세 데이터', [exportButton]));
+        
         const content = document.createElement('div');
         pane.appendChild(content);
+
+        // 여기에 상세 필터 UI 추가 (향후 구현)
 
         const table = createTable(
             ['날짜', '작업자', '공정', '품목', '작업시간', '완료수량', '오류'],
@@ -703,6 +851,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const tableRows = [
                 ['총 처리 세트 (Tray)', summary.inspection.total_trays, summary.transfer_standby_trays, summary.transfer.total_trays, summary.packaging_standby_trays, summary.packaging.total_trays],
+                ['총 처리 수량 (PCS)', summary.inspection.total_pcs_completed, summary.transfer_standby_pcs, summary.transfer.total_pcs_completed, summary.packaging_standby_pcs, summary.packaging.total_pcs_completed],
                 ['평균 작업 시간', formatSeconds(summary.inspection.avg_tray_time), '—', formatSeconds(summary.transfer.avg_tray_time), '—', formatSeconds(summary.packaging.avg_tray_time)],
                 ['초도 수율 (FPY)', `${(summary.inspection.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.transfer.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.packaging.avg_fpy * 100).toFixed(1)}%`],
             ];
@@ -810,7 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.charts[canvasId] = new Chart(ctx, { type, data, options });
     }
     
-    function createTable(headers, rows) {
+    function createTable(headers, rows, useRowId = false) {
         const table = document.createElement('table');
         table.className = 'data-table';
         const thead = table.createTHead();
@@ -824,7 +973,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const tbody = table.createTBody();
         rows.forEach(rowData => {
             const row = tbody.insertRow();
-            rowData.forEach(cellData => {
+            const data = useRowId ? rowData.data : rowData;
+            if (useRowId) {
+                row.dataset.id = rowData.id;
+            }
+            data.forEach(cellData => {
                 const cell = row.insertCell();
                 cell.textContent = cellData;
             });
@@ -917,6 +1070,57 @@ document.addEventListener('DOMContentLoaded', () => {
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+        }
+    }
+
+    function createModal(id, title) {
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = id;
+        modal.innerHTML = `
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h3>${title}</h3>
+                    <button class="close-btn">&times;</button>
+                </div>
+                <div class="modal-content"></div>
+            </div>
+        `;
+        const closeBtn = modal.querySelector('.close-btn');
+        closeBtn.addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+        return modal;
+    }
+
+    async function exportToExcel(data, filename) {
+        try {
+            const response = await fetch('/api/export_excel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessions: data })
+            });
+
+            if (!response.ok) {
+                throw new Error('Excel 내보내기 실패');
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+        } catch (error) {
+            showToast(error.message);
         }
     }
 });
