@@ -17,7 +17,13 @@ from analyzer import DataAnalyzer, WorkerPerformance
 # ####################################################################
 # # 기본 설정
 # ####################################################################
-LOG_FOLDER_PATH = "C:\\Sync"
+def load_config():
+    with open('config.json', 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+config = load_config()
+LOG_FOLDER_PATH = config.get("LOG_FOLDER_PATH", "C:\\Sync")
+
 if not os.path.isdir(LOG_FOLDER_PATH):
     os.makedirs(LOG_FOLDER_PATH, exist_ok=True)
     print(f"'{LOG_FOLDER_PATH}' 폴더가 존재하지 않아 새로 생성했습니다.")
@@ -389,5 +395,5 @@ if __name__ == '__main__':
     monitor_thread = threading.Thread(target=start_file_monitor, daemon=True)
     monitor_thread.start()
     
-    print("Flask 서버를 시작합니다. http://127.0.0.1:8088 에서 접속하세요.")
-    socketio.run(app, port=8089, debug=True, use_reloader=False)
+    print("Flask 서버를 시작합니다. http://127.0.0.1:8090 에서 접속하세요.")
+    socketio.run(app, port=8090, debug=True, use_reloader=False)

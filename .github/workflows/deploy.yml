@@ -8,8 +8,6 @@ on:
 
 jobs:
   deploy:
-    # 이 작업을 실행하지 않도록 항상 false인 조건을 추가합니다.
-    if: false
     runs-on: ubuntu-latest
 
     steps:
@@ -23,7 +21,7 @@ jobs:
         username: ${{ secrets.SERVER_USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
-          # 프로젝트 디렉토리로 이동
-          cd "/c/KMTECH Program/WorkerAnalysisGUI-web"
+          # 프로젝트 디렉토리로 이동 (실제 서버 경로로 수정 필수!)
+          cd /home/deployer/WorkerAnalysisGUI-web
           # 배포 스크립트 실행
           bash deploy.sh
