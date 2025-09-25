@@ -63,8 +63,9 @@ class DataAnalyzer:
             target_files = all_log_files
 
         if not target_files:
-            if date_filter: return pd.DataFrame()
-            raise FileNotFoundError(f"지정한 폴더 경로에 '{process_mode}'에 대한 로그 파일이 없습니다.")
+            print(f"경고: '{folder_path}' 경로에 '{process_mode}'에 대한 로그 파일이 없습니다. 빈 데이터프레임을 반환합니다.")
+            self.raw_event_df = pd.DataFrame()
+            return pd.DataFrame()
 
         for file_path in target_files:
             if os.path.getsize(file_path) == 0: continue
@@ -235,28 +236,32 @@ class DataAnalyzer:
         try:
             start_date_obj = pd.to_datetime(start_date).date()
             end_date_obj = pd.to_datetime(end_date).date()
+            mask = (df_filtered['date'] >= start_date_obj) & (df_filtered['date'] <= end_date_obj)
+            df_filtered = df_filtered.loc[mask]
         except (ValueError, TypeError, AttributeError):
             print(f"경고: 유효하지 않은 날짜 필터 값입니다. Start: {start_date}, End: {end_date}")
             return pd.DataFrame()
 
-        mask = (df_filtered['date'] >= start_date_obj) & (df_filtered['date'] <= end_date_obj)
-        df_filtered = df_filtered.loc[mask].copy()
+        if shipping_start_date and shipping_end_date:
+            if 'shipping_date' in df_filtered.columns:
+                df_filtered = df_filtered.dropna(subset=['shipping_date'])
+                if not df_filtered.empty:
+                    try:
+                        shipping_start_obj = pd.to_datetime(shipping_start_date).date()
+                        shipping_end_obj = pd.to_datetime(shipping_end_date).date()
+                        shipping_mask = (pd.to_datetime(df_filtered['shipping_date']).dt.date >= shipping_start_obj) & \
+                                        (pd.to_datetime(df_filtered['shipping_date']).dt.date <= shipping_end_obj)
+                        df_filtered = df_filtered.loc[shipping_mask]
+                    except (ValueError, TypeError, AttributeError):
+                        print(f"경고: 유효하지 않은 출고 날짜 필터 값입니다.")
+            else:
+                print("경고: 'shipping_date' 컬럼이 없어 출고일 필터를 적용할 수 없습니다.")
 
-        if shipping_start_date and shipping_end_date and 'shipping_date' in df_filtered.columns:
-            df_filtered.dropna(subset=['shipping_date'], inplace=True)
-            if not df_filtered.empty:
-                try:
-                    shipping_start_obj = pd.to_datetime(shipping_start_date).date()
-                    shipping_end_obj = pd.to_datetime(shipping_end_date).date()
-                    shipping_mask = (df_filtered['shipping_date'].dt.date >= shipping_start_obj) & (df_filtered['shipping_date'].dt.date <= shipping_end_obj)
-                    df_filtered = df_filtered.loc[shipping_mask].copy()
-                except (ValueError, TypeError, AttributeError):
-                    print(f"경고: 유효하지 않은 출고 날짜 필터 값입니다.")
 
         if selected_workers:
             df_filtered = df_filtered[df_filtered['worker'].isin(selected_workers)]
             
-        return df_filtered
+        return df_filtered.copy()
 
     def analyze_dataframe(self, df, radar_metrics, full_sessions_df=None):
         if df.empty: return {}, {}, pd.DataFrame(), None

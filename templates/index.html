@@ -6,7 +6,7 @@
     <title>성과 분석 대시보드</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
@@ -42,10 +42,17 @@
                 </div>
 
                 <div class="filter-group">
-                    <label class="filter-label">분석 기간</label>
+                    <label class="filter-label">분석 기간 (작업일 기준)</label>
                     <input type="date" id="start-date-input">
                     <span>~</span>
                     <input type="date" id="end-date-input">
+                </div>
+
+                <div class="filter-group">
+                    <label class="filter-label">출고 기간 (선택 사항)</label>
+                    <input type="date" id="shipping-start-date-input">
+                    <span>~</span>
+                    <input type="date" id="shipping-end-date-input">
                 </div>
 
                 <div class="filter-group filter-group-expand">
