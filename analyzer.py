@@ -34,7 +34,11 @@ class DataAnalyzer:
         all_event_data_dfs, target_files = [], []
 
         if date_filter:
-            all_log_files = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
+            # 메인 폴더와 날짜별 아카이브에서 모두 검색
+            main_logs = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
+            archive_logs = glob.glob(os.path.join(folder_path, '2025-*', '*작업이벤트로그*.csv'))
+            all_log_files = main_logs + archive_logs
+
             date_str_today = date_filter.strftime('%Y%m%d')
             yesterday = date_filter - datetime.timedelta(days=1)
             date_str_yesterday = yesterday.strftime('%Y%m%d')
@@ -42,16 +46,27 @@ class DataAnalyzer:
                 f for f in all_log_files
                 if f"_{date_str_today}.csv" in os.path.basename(f) or f"_{date_str_yesterday}.csv" in os.path.basename(f)
             ]
-            print(f"실시간 로딩: {len(all_log_files)}개 파일만 읽습니다. (경로: {folder_path})")
+            print(f"실시간 로딩: {len(all_log_files)}개 파일만 읽습니다. (경로: {folder_path}, 아카이브 포함)")
         else:
-            print(f"전체 데이터 로딩: '{folder_path}' 및 '{os.path.join(folder_path, 'log')}' 하위 폴더를 모두 검색합니다.")
+            print(f"전체 데이터 로딩: '{folder_path}' 및 날짜별 아카이브 폴더를 모두 검색합니다.")
             main_folder_logs = glob.glob(os.path.join(folder_path, '*작업이벤트로그*.csv'))
-            log_archive_path = os.path.join(folder_path, 'log')
+
+            # 날짜별 아카이브 폴더 검색 (2025-XX-XX 형태)
             archived_logs = []
+            archived_logs.extend(glob.glob(os.path.join(folder_path, '2025-*', '*작업이벤트로그*.csv')))
+
+            # 분기별 백업 폴더도 검색 (quarterly_backup/Q1-2025 등)
+            quarterly_path = os.path.join(os.path.dirname(folder_path), 'quarterly_backup')
+            if os.path.isdir(quarterly_path):
+                archived_logs.extend(glob.glob(os.path.join(quarterly_path, '**', '*작업이벤트로그*.csv'), recursive=True))
+
+            # 기존 log 폴더도 호환성을 위해 유지
+            log_archive_path = os.path.join(folder_path, 'log')
             if os.path.isdir(log_archive_path):
-                archived_logs = glob.glob(os.path.join(log_archive_path, '**', '*작업이벤트로그*.csv'), recursive=True)
+                archived_logs.extend(glob.glob(os.path.join(log_archive_path, '**', '*작업이벤트로그*.csv'), recursive=True))
+
             all_log_files = main_folder_logs + archived_logs
-            print(f"총 {len(all_log_files)}개의 로그 파일 발견.")
+            print(f"총 {len(all_log_files)}개의 로그 파일 발견 (메인: {len(main_folder_logs)}, 아카이브: {len(archived_logs)}).")
 
         if process_mode == '포장실':
             target_files = [f for f in all_log_files if '포장실작업이벤트로그' in os.path.basename(f)]
