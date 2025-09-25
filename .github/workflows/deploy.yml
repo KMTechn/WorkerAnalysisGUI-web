@@ -8,6 +8,9 @@ on:
 
 jobs:
   deploy:
+    # GitHub Actions SSH 방식은 네이버 클라우드 ACG 제한으로 비활성화
+    # 대신 웹훅 방식 사용: http://worker.kmtecherp.com/deploy
+    if: false
     runs-on: ubuntu-latest
 
     steps:
