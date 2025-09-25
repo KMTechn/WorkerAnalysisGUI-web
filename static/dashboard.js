@@ -40,6 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
         processModeRadios: document.getElementById('process-mode-radios'),
         startDateInput: document.getElementById('start-date-input'),
         endDateInput: document.getElementById('end-date-input'),
+        shippingStartDateInput: document.getElementById('shipping-start-date-input'),
+        shippingEndDateInput: document.getElementById('shipping-end-date-input'),
         workerList: document.getElementById('worker-list'),
         runAnalysisBtn: document.getElementById('run-analysis-btn'),
         resetFiltersBtn: document.getElementById('reset-filters-btn'),
@@ -79,6 +81,13 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.processModeRadios.addEventListener('change', handleProcessModeChange);
         elements.runAnalysisBtn.addEventListener('click', () => fetchAnalysisData());
         elements.resetFiltersBtn.addEventListener('click', resetFiltersAndRunAnalysis);
+
+        // 이벤트 위임: 탭 콘텐츠 내의 동적 요소에 대한 이벤트 처리
+        elements.tabContentContainer.addEventListener('click', (event) => {
+            if (event.target.id === 'reset-filters-from-empty-btn') {
+                resetFiltersAndRunAnalysis();
+            }
+        });
     }
 
     // ########################
@@ -97,6 +106,8 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.startDateInput.value = state.full_data.date_range.min;
             elements.endDateInput.value = state.full_data.date_range.max;
         }
+        elements.shippingStartDateInput.value = '';
+        elements.shippingEndDateInput.value = '';
         for (let option of elements.workerList.options) {
             option.selected = true;
         }
@@ -126,6 +137,9 @@ document.addEventListener('DOMContentLoaded', () => {
         state.end_date = elements.endDateInput.value;
         state.selected_workers = Array.from(elements.workerList.selectedOptions).map(opt => opt.value);
 
+        const shipping_start_date = elements.shippingStartDateInput.value;
+        const shipping_end_date = elements.shippingEndDateInput.value;
+
         try {
             const response = await fetch('/api/data', {
                 method: 'POST',
@@ -135,6 +149,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     start_date: state.start_date,
                     end_date: state.end_date,
                     selected_workers: state.selected_workers,
+                    shipping_start_date: shipping_start_date,
+                    shipping_end_date: shipping_end_date,
                 }),
             });
             if (!response.ok) throw new Error((await response.json()).error || `HTTP Error: ${response.status}`);
@@ -349,7 +365,10 @@ document.addEventListener('DOMContentLoaded', () => {
         pane.appendChild(content);
 
         if (!data.worker_data || data.worker_data.length === 0) {
-            content.innerHTML = '<p>분석할 작업자 데이터가 없습니다.</p>';
+            content.innerHTML = createEmptyContentMessage(
+                '분석할 작업자 데이터가 없습니다.',
+                '선택하신 기간 또는 조건에 해당하는 작업 기록이 없습니다. 필터 조건을 변경하거나 기간을 넓게 설정해 보세요.'
+            );
             return;
         }
 
@@ -992,6 +1011,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 <p class="card-value ${valueClass}">${value}</p>
                 ${extraText ? `<p class="card-extra">${extraText}</p>` : ''}
             </div>`;
+    }
+
+    function createEmptyContentMessage(title, description) {
+        return `
+            <div class="card empty-content">
+                <h4>${title}</h4>
+                <p>${description}</p>
+                <button id="reset-filters-from-empty-btn" class="btn">필터 초기화</button>
+            </div>
+        `;
     }
 
     function formatSeconds(seconds) {

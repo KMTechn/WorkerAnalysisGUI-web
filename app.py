@@ -25,8 +25,9 @@ config = load_config()
 LOG_FOLDER_PATH = config.get("LOG_FOLDER_PATH", "C:\\Sync")
 
 if not os.path.isdir(LOG_FOLDER_PATH):
-    os.makedirs(LOG_FOLDER_PATH, exist_ok=True)
-    print(f"'{LOG_FOLDER_PATH}' 폴더가 존재하지 않아 새로 생성했습니다.")
+    print(f"오류: 로그 폴더 '{LOG_FOLDER_PATH}'가 존재하지 않거나 접근 권한이 없습니다.")
+    print("Syncthing이 해당 경로에 데이터를 동기화하고 있는지, 애플리케이션 실행 사용자에게 읽기 권한이 있는지 확인해주세요.")
+    exit(1)
 
 # ####################################################################
 # # Flask 및 SocketIO 설정
@@ -98,7 +99,10 @@ def get_analysis_data():
         all_workers = sorted(full_df['worker'].astype(str).unique().tolist())
         selected_workers = filters.get('selected_workers') or all_workers
 
-        filtered_df = analyzer.filter_data(full_df.copy(), start_date, end_date, selected_workers)
+        shipping_start_date = filters.get('shipping_start_date')
+        shipping_end_date = filters.get('shipping_end_date')
+
+        filtered_df = analyzer.filter_data(full_df.copy(), start_date, end_date, selected_workers, shipping_start_date, shipping_end_date)
         
         radar_metrics = RADAR_METRICS_CONFIG.get(process_mode, RADAR_METRICS_CONFIG['이적실'])
         worker_data, kpis, _, normalized_df = analyzer.analyze_dataframe(filtered_df, radar_metrics, full_sessions_df=full_df)
