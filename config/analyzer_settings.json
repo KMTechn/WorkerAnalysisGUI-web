@@ -1,6 +1,6 @@
 {
     "scale_factor": 1.4000000000000004,
-    "log_folder_path": "C:\\Sync",
+    "log_folder_path": "/home/syncthing/backup",
     "column_widths": {
         "production_summary_tree_item_code": 141,
         "production_summary_tree_item_name": 62,

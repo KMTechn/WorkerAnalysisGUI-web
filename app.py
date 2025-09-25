@@ -471,4 +471,4 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     print("Flask 서버를 시작합니다. http://127.0.0.1:8088 에서 접속하세요.")
-    socketio.run(app, port=8089, debug=True, use_reloader=False)
+    socketio.run(app, host='0.0.0.0', port=8089, debug=True, use_reloader=False)
