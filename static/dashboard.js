@@ -15,12 +15,25 @@ document.addEventListener('DOMContentLoaded', () => {
             selected_worker: null,
         },
         comparison_period: '일간', // 공정 비교 탭 기간
+        detailed_data: {
+            current_page: 1,
+            rows_per_page: 50,
+        },
+        error_log: {
+            current_page: 1,
+            rows_per_page: 50,
+        },
+        traceability: {
+            current_page: 1,
+            rows_per_page: 50,
+            results_cache: [],
+        },
     };
 
     const TAB_CONFIG = {
         "이적실": ["실시간 현황", "생산량 분석", "작업자별 분석", "오류 로그", "생산 이력 추적", "상세 데이터"],
         "검사실": ["실시간 현황", "검사량 분석", "작업자별 분석", "오류 로그", "생산 이력 추적", "상세 데이터"],
-        "포장실": ["실시간 현황", "생산량 추이 분석", "오류 로그", "생산 이력 추적", "상세 데이터"],
+        "포장실": ["실시간 현황", "생산량 추이 분석", "출고일자별 분석", "오류 로그", "생산 이력 추적", "상세 데이터"],
         "전체 비교": ["공정 비교 분석", "생산 이력 추적", "상세 데이터"],
     };
     
@@ -68,8 +81,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function initialize() {
         loadFiltersFromStorage();
+        loadFontSize();
         bindEventListeners();
         fetchAnalysisData();
+    }
+
+    function changeFontSize(delta) {
+        const body = document.body;
+        const currentSize = parseFloat(window.getComputedStyle(body).getPropertyValue('font-size'));
+        const newSize = currentSize + delta;
+        body.style.fontSize = `${newSize}px`;
+        localStorage.setItem('font_size', newSize);
+    }
+
+    function loadFontSize() {
+        const savedSize = localStorage.getItem('font_size');
+        if (savedSize) {
+            document.body.style.fontSize = `${savedSize}px`;
+        }
     }
 
     // ########################
@@ -79,6 +108,12 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.processModeRadios.addEventListener('change', handleProcessModeChange);
         elements.runAnalysisBtn.addEventListener('click', () => fetchAnalysisData());
         elements.resetFiltersBtn.addEventListener('click', resetFiltersAndRunAnalysis);
+
+        const decreaseFontSizeBtn = document.getElementById('decrease-font-size');
+        const increaseFontSizeBtn = document.getElementById('increase-font-size');
+
+        decreaseFontSizeBtn.addEventListener('click', () => changeFontSize(-1));
+        increaseFontSizeBtn.addEventListener('click', () => changeFontSize(1));
     }
 
     // ########################
@@ -121,6 +156,9 @@ document.addEventListener('DOMContentLoaded', () => {
         toggleLoading(true);
         elements.tabsContainer.innerHTML = '';
         elements.tabContentContainer.innerHTML = '<div class="card"><p>데이터를 분석하고 있습니다. 잠시만 기다려 주세요...</p></div>';
+
+        // Reset page number for detailed data tab
+        state.detailed_data.current_page = 1;
 
         state.start_date = elements.startDateInput.value;
         state.end_date = elements.endDateInput.value;
@@ -243,6 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
             '생산 이력 추적': renderTraceabilityTab,
             '상세 데이터': renderFullDataTableTab,
             '공정 비교 분석': renderComparisonTab,
+            '출고일자별 분석': renderShippingDateTab,
         };
         return mapping[tabName] || ((pane) => pane.innerHTML = `<p>${tabName} 탭을 찾을 수 없습니다.</p>`);
     }
@@ -289,21 +328,39 @@ document.addEventListener('DOMContentLoaded', () => {
         itemStatusEl.innerHTML = '<h3>품목별 현황</h3>';
         if(realtimeData.item_status.length > 0) {
             const itemTable = createTable(
-                ['품목', '생산량 (PCS)'],
-                realtimeData.item_status.map(i => [i.item_display, i.pcs_completed])
+                ['품목', '생산량 (PCS)', '파렛트 수량'],
+                realtimeData.item_status.map(i => [i.item_display, i.pcs_completed, i.pallet_count])
             );
             itemStatusEl.appendChild(itemTable);
         } else {
             itemStatusEl.innerHTML += '<p>데이터 없음</p>';
         }
 
+        const datasets = [
+            {
+                type: 'bar',
+                label: '오늘 생산량',
+                data: realtimeData.hourly_production.today,
+                backgroundColor: 'rgba(0, 82, 204, 0.6)',
+            }
+        ];
+
+        if (realtimeData.hourly_production.average && realtimeData.hourly_production.average.length > 0) {
+            datasets.unshift({
+                type: 'line',
+                label: '최근 30일 평균',
+                data: realtimeData.hourly_production.average,
+                borderColor: 'rgba(255, 99, 132, 0.8)',
+                backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                borderWidth: 2,
+                fill: false,
+                tension: 0.1
+            });
+        }
+
         createChart('realtime-hourly-chart', 'bar', {
             labels: realtimeData.hourly_production.labels,
-            datasets: [{
-                label: '시간대별 생산량',
-                data: realtimeData.hourly_production.data,
-                backgroundColor: 'rgba(0, 82, 204, 0.6)',
-            }]
+            datasets: datasets
         }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { text: '완료 PCS 수', display: true } } } });
     }
 
@@ -487,6 +544,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }, {});
 
         const tableRows = Object.entries(itemPerf).map(([itemName, stats]) => {
+            if (stats.count < 30) {
+                return [itemName, '데이터 부족', stats.count];
+            }
             const avgTime = stats.times.reduce((a, b) => a + b, 0) / stats.times.length;
             return [itemName, formatSeconds(avgTime), stats.count];
         });
@@ -578,6 +638,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }, {});
 
         const tableRows = Object.entries(itemPerf).map(([itemName, stats]) => {
+            if (stats.count < 30) {
+                return [itemName, '데이터 부족', stats.count];
+            }
             const avgTime = stats.times.reduce((a, b) => a + b, 0) / stats.times.length;
             return [itemName, formatSeconds(avgTime), stats.count];
         });
@@ -599,7 +662,7 @@ document.addEventListener('DOMContentLoaded', () => {
             className: 'btn',
             onClick: () => {
                 if (errorEvents.length > 0) {
-                    exportToCSV(errorEvents, `error_log_${new Date().toISOString().split('T')[0]}.csv`);
+                    exportErrorLogToCSV(errorEvents, `error_log_${new Date().toISOString().split('T')[0]}.csv`);
                 }
             }
         };
@@ -774,13 +837,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function renderFullDataTableTab(pane, data) {
+        const sessions = data.filtered_sessions_data;
+        const totalRows = sessions.length;
+        const totalPages = Math.ceil(totalRows / state.detailed_data.rows_per_page);
+        const currentPage = state.detailed_data.current_page;
+
+        const start = (currentPage - 1) * state.detailed_data.rows_per_page;
+        const end = start + state.detailed_data.rows_per_page;
+        const paginatedSessions = sessions.slice(start, end);
+
         const exportButton = {
             text: 'Excel로 내보내기',
             className: 'btn',
             onClick: () => {
-                const displayedData = state.full_data.filtered_sessions_data; // 현재 필터링된 데이터 사용
-                if (displayedData.length > 0) {
-                    exportToExcel(displayedData, `상세_데이터_${new Date().toISOString().split('T')[0]}.xlsx`);
+                if (sessions.length > 0) {
+                    exportToExcel(sessions, `상세_데이터_${new Date().toISOString().split('T')[0]}.xlsx`);
                 }
             }
         };
@@ -789,11 +860,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const content = document.createElement('div');
         pane.appendChild(content);
 
-        // 여기에 상세 필터 UI 추가 (향후 구현)
-
         const table = createTable(
             ['날짜', '작업자', '공정', '품목', '작업시간', '완료수량', '오류'],
-            data.filtered_sessions_data.map(s => [
+            paginatedSessions.map(s => [
                 new Date(s.date).toLocaleDateString(),
                 s.worker,
                 s.process,
@@ -801,12 +870,46 @@ document.addEventListener('DOMContentLoaded', () => {
                 formatSeconds(s.work_time),
                 s.pcs_completed,
                 s.had_error ? '예' : '아니오'
-            ])
+            ]),
+            false,
+            'detailed-data-table'
         );
         const container = document.createElement('div');
         container.className = 'table-container';
         container.appendChild(table);
         content.appendChild(container);
+
+        // Pagination Controls
+        const paginationContainer = document.createElement('div');
+        paginationContainer.className = 'pagination-controls';
+        
+        const prevButton = document.createElement('button');
+        prevButton.textContent = '이전';
+        prevButton.disabled = currentPage === 1;
+        prevButton.addEventListener('click', () => {
+            if (state.detailed_data.current_page > 1) {
+                state.detailed_data.current_page--;
+                renderActiveTabData();
+            }
+        });
+
+        const pageInfo = document.createElement('span');
+        pageInfo.textContent = `페이지 ${currentPage} / ${totalPages}`;
+
+        const nextButton = document.createElement('button');
+        nextButton.textContent = '다음';
+        nextButton.disabled = currentPage === totalPages;
+        nextButton.addEventListener('click', () => {
+            if (state.detailed_data.current_page < totalPages) {
+                state.detailed_data.current_page++;
+                renderActiveTabData();
+            }
+        });
+
+        paginationContainer.appendChild(prevButton);
+        paginationContainer.appendChild(pageInfo);
+        paginationContainer.appendChild(nextButton);
+        content.appendChild(paginationContainer);
     }
 
     function renderComparisonTab(pane, data) {
@@ -850,15 +953,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 : data.comparison_data.summary_period;
 
             const tableRows = [
-                ['총 처리 세트 (Tray)', summary.inspection.total_trays, summary.transfer_standby_trays, summary.transfer.total_trays, summary.packaging_standby_trays, summary.packaging.total_trays],
-                ['총 처리 수량 (PCS)', summary.inspection.total_pcs_completed, summary.transfer_standby_pcs, summary.transfer.total_pcs_completed, summary.packaging_standby_pcs, summary.packaging.total_pcs_completed],
+                [
+                    '총 처리 세트 (Tray)', 
+                    summary.inspection.total_trays, 
+                    { text: summary.transfer_standby_trays, className: 'standby-cell', dataset: { standbyType: 'transfer' } },
+                    summary.transfer.total_trays, 
+                    { text: summary.packaging_standby_trays, className: 'standby-cell', dataset: { standbyType: 'packaging' } },
+                    summary.packaging.total_trays
+                ],
+                [
+                    '총 처리 수량 (PCS)', 
+                    summary.inspection.total_pcs_completed, 
+                    { text: summary.transfer_standby_pcs, className: 'standby-cell', dataset: { standbyType: 'transfer' } },
+                    summary.transfer.total_pcs_completed, 
+                    { text: summary.packaging_standby_pcs, className: 'standby-cell', dataset: { standbyType: 'packaging' } },
+                    summary.packaging.total_pcs_completed
+                ],
                 ['평균 작업 시간', formatSeconds(summary.inspection.avg_tray_time), '—', formatSeconds(summary.transfer.avg_tray_time), '—', formatSeconds(summary.packaging.avg_tray_time)],
                 ['초도 수율 (FPY)', `${(summary.inspection.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.transfer.avg_fpy * 100).toFixed(1)}%`, '—', `${(summary.packaging.avg_fpy * 100).toFixed(1)}%`],
             ];
             const tableContainer = pane.querySelector('#comparison-table-container');
             tableContainer.innerHTML = ''; // 기존 테이블 삭제
-            const table = createTable(['지표', '검사완료', '이적대기', '이적완료', '포장대기', '포장완료'], tableRows);
+            const table = createTable(['지표', '검사완료', '이적대기', '이적완료', '포장대기', '포장완료'], tableRows, false, 'comparison-table');
             tableContainer.appendChild(table);
+
+            // Add click event for standby details
+            table.querySelectorAll('.standby-cell').forEach(cell => {
+                cell.addEventListener('click', () => {
+                    const standbyType = cell.dataset.standbyType;
+                    showStandbyDetails(standbyType, state.full_data.filtered_sessions_data);
+                });
+            });
         };
         
         const summaryPeriodRadios = pane.querySelector('#comparison-summary-period-radios');
@@ -918,6 +1043,145 @@ document.addEventListener('DOMContentLoaded', () => {
         }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } });
     }
 
+    function showStandbyDetails(standbyType, sessions) {
+        let sourceProcess, targetProcess, title;
+        if (standbyType === 'transfer') {
+            sourceProcess = '검사실';
+            targetProcess = '이적실';
+            title = '이적 대기 품목';
+        } else { // packaging
+            sourceProcess = '이적실';
+            targetProcess = '포장실';
+            title = '포장 대기 품목';
+        }
+
+        const sourceItems = sessions.filter(s => s.process === sourceProcess)
+            .reduce((acc, s) => {
+                acc[s.item_display] = (acc[s.item_display] || 0) + s.pcs_completed;
+                return acc;
+            }, {});
+
+        const targetItems = sessions.filter(s => s.process === targetProcess)
+            .reduce((acc, s) => {
+                acc[s.item_display] = (acc[s.item_display] || 0) + s.pcs_completed;
+                return acc;
+            }, {});
+
+        const standbyItems = Object.entries(sourceItems).map(([item, pcs]) => {
+            const targetPcs = targetItems[item] || 0;
+            const standbyPcs = pcs - targetPcs;
+            return { item, standbyPcs };
+        }).filter(item => item.standbyPcs > 0);
+
+        const modal = createModal('standby-details-popup', title);
+        const content = modal.querySelector('.modal-content');
+
+        if (standbyItems.length > 0) {
+            const table = createTable(['품목', '대기 수량 (PCS)'], standbyItems.map(i => [i.item, i.standbyPcs]));
+            content.appendChild(table);
+        } else {
+            content.innerHTML = '<p>대기 중인 품목이 없습니다.</p>';
+        }
+
+        document.body.appendChild(modal);
+    }
+
+    function showStandbyDetails(standbyType, sessions) {
+        let sourceProcess, targetProcess, title;
+        if (standbyType === 'transfer') {
+            sourceProcess = '검사실';
+            targetProcess = '이적실';
+            title = '이적 대기 품목';
+        } else { // packaging
+            sourceProcess = '이적실';
+            targetProcess = '포장실';
+            title = '포장 대기 품목';
+        }
+
+        const sourceItems = sessions.filter(s => s.process === sourceProcess)
+            .reduce((acc, s) => {
+                acc[s.item_display] = (acc[s.item_display] || 0) + s.pcs_completed;
+                return acc;
+            }, {});
+
+        const targetItems = sessions.filter(s => s.process === targetProcess)
+            .reduce((acc, s) => {
+                acc[s.item_display] = (acc[s.item_display] || 0) + s.pcs_completed;
+                return acc;
+            }, {});
+
+        const standbyItems = Object.entries(sourceItems).map(([item, pcs]) => {
+            const targetPcs = targetItems[item] || 0;
+            const standbyPcs = pcs - targetPcs;
+            return { item, standbyPcs };
+        }).filter(item => item.standbyPcs > 0);
+
+        const modal = createModal('standby-details-popup', title);
+        const content = modal.querySelector('.modal-content');
+
+        if (standbyItems.length > 0) {
+            const table = createTable(['품목', '대기 수량 (PCS)'], standbyItems.map(i => [i.item, i.standbyPcs]));
+            content.appendChild(table);
+        } else {
+            content.innerHTML = '<p>대기 중인 품목이 없습니다.</p>';
+        }
+
+        document.body.appendChild(modal);
+    }
+
+    function renderShippingDateTab(pane, data) {
+        pane.appendChild(createTabHeader('출고일자별 생산량 (최근 7일)'));
+        const content = document.createElement('div');
+        pane.appendChild(content);
+
+        const sessions = data.filtered_sessions_data.filter(s => s.shipping_date);
+        if (sessions.length === 0) {
+            content.innerHTML = '<p>표시할 출고일자 데이터가 없습니다.</p>';
+            return;
+        }
+
+        const recentDates = [...new Set(sessions.map(s => s.shipping_date.split('T')[0]))]
+            .sort()
+            .reverse()
+            .slice(0, 7);
+
+        const pivotData = sessions.reduce((acc, session) => {
+            const date = session.shipping_date.split('T')[0];
+            if (!recentDates.includes(date)) return acc;
+
+            const item = session.item_display;
+            if (!acc[item]) acc[item] = {};
+            acc[item][date] = (acc[item][date] || 0) + session.pcs_completed;
+            return acc;
+        }, {});
+
+        const headers = ['품목', ...recentDates, '총 PCS', '총 Pallets'];
+        const rows = Object.entries(pivotData).map(([item, dateData]) => {
+            const totalPcs = recentDates.reduce((sum, date) => sum + (dateData[date] || 0), 0);
+            const totalPallets = totalPcs / 60.0;
+            const rowData = [item];
+            recentDates.forEach(date => rowData.push(dateData[date] || 0));
+            rowData.push(totalPcs, totalPallets.toFixed(1));
+            return rowData;
+        });
+
+        const table = createTable(headers, rows, false, 'shipping-date-table');
+        const container = document.createElement('div');
+        container.className = 'table-container';
+        container.appendChild(table);
+        content.appendChild(container);
+    }
+
+
+    // ########################
+    // ### 유틸리티 함수 ###
+    // ########################
+
+
+    // ########################
+    // ### 유틸리티 함수 ###
+    // ########################""
+
 
     // ########################
     // ### 유틸리티 함수 ###
@@ -959,15 +1223,49 @@ document.addEventListener('DOMContentLoaded', () => {
         state.charts[canvasId] = new Chart(ctx, { type, data, options });
     }
     
-    function createTable(headers, rows, useRowId = false) {
+            function createTable(headers, rows, useRowId = false, tableId = null) {
         const table = document.createElement('table');
         table.className = 'data-table';
+        if (tableId) {
+            table.dataset.tableId = tableId;
+        }
         const thead = table.createTHead();
         const headerRow = thead.insertRow();
         headers.forEach(text => {
             const th = document.createElement('th');
             th.textContent = text;
+            const resizeHandle = document.createElement('div');
+            resizeHandle.className = 'resize-handle';
+            th.appendChild(resizeHandle);
             headerRow.appendChild(th);
+
+            let x = 0;
+            let w = 0;
+
+            const mouseDownHandler = function (e) {
+                x = e.clientX;
+
+                const styles = window.getComputedStyle(th);
+                w = parseInt(styles.width, 10);
+
+                document.addEventListener('mousemove', mouseMoveHandler);
+                document.addEventListener('mouseup', mouseUpHandler);
+            };
+
+            const mouseMoveHandler = function (e) {
+                const dx = e.clientX - x;
+                th.style.width = `${w + dx}px`;
+            };
+
+            const mouseUpHandler = function () {
+                document.removeEventListener('mousemove', mouseMoveHandler);
+                document.removeEventListener('mouseup', mouseUpHandler);
+                if (table.dataset.tableId) {
+                    saveColumnWidths(table.dataset.tableId);
+                }
+            };
+
+            resizeHandle.addEventListener('mousedown', mouseDownHandler);
         });
 
         const tbody = table.createTBody();
@@ -979,10 +1277,48 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             data.forEach(cellData => {
                 const cell = row.insertCell();
-                cell.textContent = cellData;
+                if (typeof cellData === 'object' && cellData !== null) {
+                    cell.textContent = cellData.text;
+                    if (cellData.className) cell.className = cellData.className;
+                    if (cellData.dataset) {
+                        Object.entries(cellData.dataset).forEach(([key, value]) => {
+                            cell.dataset[key] = value;
+                        });
+                    }
+                } else {
+                    cell.textContent = cellData;
+                }
             });
         });
+
+        if (tableId) {
+            loadColumnWidths(tableId);
+        }
+
         return table;
+    }
+
+    function saveColumnWidths(tableId) {
+        const table = document.querySelector(`[data-table-id='${tableId}']`);
+        if (!table) return;
+
+        const widths = Array.from(table.querySelectorAll('th')).map(th => th.style.width);
+        localStorage.setItem(`table_widths_${tableId}`, JSON.stringify(widths));
+    }
+
+    function loadColumnWidths(tableId) {
+        const widths = JSON.parse(localStorage.getItem(`table_widths_${tableId}`));
+        if (!widths) return;
+
+        const table = document.querySelector(`[data-table-id='${tableId}']`);
+        if (!table) return;
+
+        const headers = table.querySelectorAll('th');
+        headers.forEach((th, i) => {
+            if (widths[i]) {
+                th.style.width = widths[i];
+            }
+        });
     }
     
     function createCard(title, value, valueClass = '', extraText = '') {
@@ -1096,6 +1432,34 @@ document.addEventListener('DOMContentLoaded', () => {
         return modal;
     }
 
+    async function exportErrorLogToCSV(data, filename) {
+        try {
+            const response = await fetch('/api/export_error_log', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ errors: data })
+            });
+
+            if (!response.ok) {
+                throw new Error('CSV 내보내기 실패');
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+        } catch (error) {
+            showToast(error.message);
+        }
+    }
+
     async function exportToExcel(data, filename) {
         try {
             const response = await fetch('/api/export_excel', {
@@ -1122,5 +1486,35 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             showToast(error.message);
         }
+    }
+
+    function createPaginationControls(container, currentPage, totalPages, onPageChange) {
+        container.innerHTML = '';
+        container.className = 'pagination-controls';
+
+        const prevButton = document.createElement('button');
+        prevButton.textContent = '이전';
+        prevButton.disabled = currentPage === 1;
+        prevButton.addEventListener('click', () => {
+            if (currentPage > 1) {
+                onPageChange(currentPage - 1);
+            }
+        });
+
+        const pageInfo = document.createElement('span');
+        pageInfo.textContent = `페이지 ${currentPage} / ${totalPages}`;
+
+        const nextButton = document.createElement('button');
+        nextButton.textContent = '다음';
+        nextButton.disabled = currentPage === totalPages;
+        nextButton.addEventListener('click', () => {
+            if (currentPage < totalPages) {
+                onPageChange(currentPage + 1);
+            }
+        });
+
+        container.appendChild(prevButton);
+        container.appendChild(pageInfo);
+        container.appendChild(nextButton);
     }
 });

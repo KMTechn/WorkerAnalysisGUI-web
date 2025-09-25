@@ -1,72 +1,150 @@
-# WorkerAnalysisGUI-web
+# WorkerAnalysisGUI-web 기술 명세서
 
-WorkerAnalysisGUI-web은 작업 현장의 이벤트 로그를 분석하여 작업자의 성과를 시각화하고 추적하는 웹 기반 대시보드 애플리케이션입니다. 기존 Tkinter 기반의 데스크톱 애플리케이션을 Flask와 WebSocket 기술을 사용하여 실시간 기능을 갖춘 현대적인 웹 애플리케이션으로 재구축했습니다.
+태그: #Python, #Flask, #JavaScript, #Web, #GUI, #DataAnalysis, #Dashboard
 
-## 주요 기능
+## 문서정보
 
-- **실시간 현황 대시보드:** `watchdog`과 `Socket.IO`를 통해 로그 파일의 변경을 실시간으로 감지하고, 현재 작업 상황을 웹 UI에 즉시 업데이트합니다.
-- **다차원 성과 분석:** 생산량, 작업 시간, 초도 수율(FPY) 등 다양한 KPI를 기반으로 작업자 및 공정의 성과를 분석합니다.
-- **동적 데이터 시각화:** `Chart.js`를 사용하여 생산량 추이, 작업자별 성과 레이더 차트 등 인터랙티브한 차트를 제공합니다.
-- **상세 분석 및 필터링:** 특정 기간, 공정, 작업자별로 데이터를 필터링하여 상세한 분석을 수행할 수 있습니다.
-- **생산 이력 추적:** 작업지시 ID(WID), 완제품 배치(FPB), 개별 제품 바코드 등 다양한 조건으로 생산 이력을 추적합니다.
-- **공정 비교 분석:** 검사, 이적, 포장 등 여러 공정의 성과를 나란히 비교하여 병목 현상이나 개선점을 파악합니다.
-- **자동 배포 (CI/CD):** GitHub Actions를 통해 `main` 브랜치에 코드가 푸시될 때마다 운영 서버에 자동으로 최신 버전이 배포됩니다.
+| 항목 | 내용 |
+|---|---|
+| 한 줄 요약 (TL;DR) | 작업 로그 데이터를 실시간으로 분석하여 웹 기반 대시보드로 시각화하는 Flask 기반의 데이터 분석 및 모니터링 도구입니다. |
+| 담당자/팀 (Owner) | [담당자 이름 또는 개발팀] |
+| 버전 (Version) | 3.0.0-web |
+| 저장소 (Repository) | [GitHub/GitLab 링크] |
+| 상태 (Status) | 운영 중 |
+| 최종 배포일 | YYYY-MM-DD |
 
-## 기술 스택
+## 1. 개요
 
-- **백엔드:**
-  - Python
-  - Flask (웹 프레임워크)
-  - Flask-SocketIO (실시간 웹 통신)
-  - Pandas, NumPy (데이터 분석)
-  - Watchdog (파일 시스템 모니터링)
-  - Eventlet (비동기 네트워킹)
-- **프론트엔드:**
-  - HTML5, CSS3, JavaScript (ES6+)
-  - Chart.js (데이터 시각화)
-  - Socket.IO Client
-- **배포:**
-  - GitHub Actions (CI/CD)
+### 목적 (Purpose)
+로컬 파일 시스템(`C:\Sync`)에 저장되는 CSV 형식의 작업 이벤트 로그를 지속적으로 모니터링하고, 데이터를 자동으로 분석하여 그 결과를 웹 기반 대시보드를 통해 사용자에게 직관적으로 제공합니다. 이를 통해 데이터 기반의 신속한 의사결정을 지원하고 생산성 및 공정 효율 개선에 기여하는 것을 목적으로 합니다.
 
-## 설치 및 실행 방법
+### 주요 기능 (Key Features)
+*   **실시간 데이터 분석 및 시각화**: `watchdog`을 이용해 로그 파일을 실시간으로 감지하고, `Flask-SocketIO`를 통해 분석 결과를 웹 대시보드에 즉시 업데이트합니다.
+*   **대화형 웹 대시보드**: `Flask` 백엔드와 순수 `JavaScript` 프론트엔드로 구현된 동적 대시보드를 제공합니다. 사용자는 공정, 기간, 작업자별로 데이터를 필터링하고 다양한 관점(생산량, 작업자 성과, 오류 등)에서 분석 결과를 확인할 수 있습니다.
+*   **다중 공정 분석**: 이적실, 검사실, 포장실 등 여러 공정을 선택하여 분석하거나, 전체 공정을 비교 분석할 수 있습니다.
+*   **데이터 내보내기**: 분석된 상세 데이터를 Excel 또는 CSV 파일로 손쉽게 내보낼 수 있습니다.
+*   **자동화된 배포**: GitHub Actions를 통해 `main` 브랜치에 푸시 시 서버에 자동으로 배포되는 CI/CD 파이프라인이 구축되어 있습니다. (`deploy.yml`)
 
-### 1. 저장소 복제
+## 2. 아키텍처 및 설계 (Architecture & Design)
 
-```bash
-git clone https://github.com/KMTechn/WorkerAnalysisGUI-web.git
-cd WorkerAnalysisGUI-web
+### 시스템 아키텍처 다이어그램
+
+```
++-------------------+      HTTP/Socket.IO      +-------------------------+
+|  클라이언트       | <----------------------> |  Flask 웹 서버          |
+|  (웹 브라우저)    |                          |  (app.py)               |
+|                   |                          |                         |
+|  - HTML/CSS/JS    |                          |  - API 라우팅 (JSON)    |
+|  - Chart.js       |                          |  - SocketIO 이벤트 처리 |
+|  - 데이터 시각화  |                          |  - 템플릿 렌더링        |
++-------------------+                          +-----------+-------------+
+         ^                                                   |
+         | 요청/응답                                         | 데이터 분석 요청
+         |                                                   |
++--------+--------+                                          v
+|  정적 파일/템플릿 |                                   +-------------------------+
+|  (static/,       | <-------------------------------> |  데이터 분석 모듈       |
+|   templates/)    |                                   |  (analyzer.py)          |
++-------------------+                                   |                         |
+                                                        |  - CSV 데이터 파싱/처리 |
+                                                        |  - Pandas/Numpy 분석    |
+                                                        +-----------+-------------+
+                                                                    |
+                                                                    | 파일 읽기
+                                                                    v
+                                                            +-------------------+
+                                                            |  파일 시스템      |
+                                                            |  (C:\Sync\*.csv)  |
++-------------------+                                       +-------------------+
+| Watchdog 감시자   | --------------------------------------> |                   |
+| (백그라운드 스레드)|   파일 변경 이벤트 감지               +-------------------+
++-------------------+
 ```
 
-### 2. 의존성 설치
+**주요 구성 요소 설명**:
 
-프로젝트에 필요한 Python 라이브러리를 설치합니다. (가상 환경 사용을 권장합니다.)
+1.  **클라이언트 (웹 브라우저)**: 사용자가 대시보드와 상호작용하는 인터페이스입니다. `templates/index.html` 구조 위에 `static/dashboard.js`가 동적으로 콘텐츠를 생성하고, `Chart.js`를 사용해 데이터를 시각화합니다.
+2.  **웹 서버 (Flask `app.py`)**: Python Flask 프레임워크 기반의 백엔드 서버입니다. 클라이언트의 HTTP 요청에 대해 JSON 형식의 분석 데이터를 반환하는 API 엔드포인트를 제공하며, `Flask-SocketIO`를 통해 실시간 데이터 업데이트 이벤트를 클라이언트로 푸시합니다.
+3.  **데이터 분석 모듈 (`analyzer.py`)**: 핵심 데이터 처리 및 분석 로직을 담당합니다. `pandas`와 `numpy`를 사용하여 지정된 폴더의 CSV 로그를 읽고, 세션 데이터로 가공한 뒤 각종 KPI와 성과 지표를 계산합니다.
+4.  **파일 시스템 감시자 (`watchdog`)**: `app.py` 실행 시 별도의 스레드에서 실행되며, `C:\Sync` 폴더의 로그 파일 변경을 감지하여 `SocketIO`를 통해 클라이언트에 변경 사실을 알리는 역할을 합니다.
 
+### 핵심 구성 요소 (Core Components)
+*   **`app.py`**: Flask 웹 애플리케이션의 엔트리 포인트. API 라우팅, `analyzer.py` 호출, `watchdog` 스레드 실행, `SocketIO` 통신을 관리합니다.
+*   **`analyzer.py`**: 데이터 분석 로직을 캡슐화한 클래스. CSV 파일 로딩, 데이터 정제, 세션화, KPI 계산 등 모든 분석 작업을 수행합니다.
+*   **`static/dashboard.js`**: 프론트엔드의 모든 로직을 담당합니다. 백엔드 API를 호출하여 데이터를 받아오고, 받은 데이터를 기반으로 동적으로 HTML 콘텐츠(테이블, 차트, 카드 등)를 생성하여 화면에 렌더링합니다.
+*   **`templates/index.html`**: 웹 페이지의 기본 골격을 정의하는 단일 HTML 파일입니다. `dashboard.js`가 이 위에서 동작합니다.
+*   **`.github/workflows/`**: CI/CD 파이프라인 정의 파일이 위치합니다.
+    *   `deploy.yml`: `main` 브랜치 푸시 시, `deploy.sh` 스크립트를 원격 서버에서 실행하여 자동으로 배포합니다.
+    *   `release.yml`: `v*` 형태의 태그 푸시 시, `WorkerAnalysisGUI.py`(데스크톱 버전)를 PyInstaller로 빌드하고 GitHub Release를 생성합니다. (웹 버전과는 직접적인 관련이 적음)
+
+### 데이터 흐름 (Data Flow)
+1.  **초기 로드**: 사용자가 웹 브라우저로 접속하면 `app.py`는 `index.html`을 렌더링합니다. `dashboard.js`는 `/api/data`에 분석 요청을 보내 초기 데이터를 받아와 전체 대시보드를 그립니다.
+2.  **필터 변경**: 사용자가 사이드바에서 필터(기간, 작업자 등)를 변경하고 '분석 실행'을 클릭하면, `dashboard.js`는 새로운 필터 조건으로 `/api/data`를 다시 호출하여 해당 조건의 데이터로 대시보드를 새로고침합니다.
+3.  **실시간 업데이트**: 로컬의 `watchdog` 스레드가 `C:\Sync` 폴더의 파일 변경을 감지하면, `app.py`의 `SocketIO` 서버를 통해 'data_updated' 이벤트를 모든 클라이언트에 전송합니다. `dashboard.js`는 이 이벤트를 수신하고, '실시간 현황' 탭이 활성화되어 있을 경우 실시간 데이터를 다시 요청하여 해당 탭만 업데이트합니다.
+
+### 주요 의존성 (Dependencies)
+*   **라이브러리**: `requirements.txt` 참조
+    *   `Flask`, `Flask-SocketIO`, `eventlet`: 웹 서버 및 실시간 통신
+    *   `pandas`, `numpy`: 데이터 분석 및 처리
+    *   `watchdog`: 파일 시스템 이벤트 모니터링
+*   **데이터베이스**: 별도의 데이터베이스를 사용하지 않으며, 모든 데이터는 파일 시스템 기반으로 처리됩니다.
+
+## 3. 설치 및 실행 방법 (Setup & Run)
+
+### 3.1. 사전 요구사항 (Prerequisites)
+*   Language: Python 3.9 이상
+*   Tools: Git
+
+### 3.2. 설치 및 환경 설정 (Installation & Configuration)
 ```bash
+# 1. 저장소 복제
+git clone [repository_url]
+cd WorkerAnalysisGUI-web
+
+# 2. Python 가상 환경 생성 및 활성화 (권장)
+python -m venv venv
+# Windows
+.\venv\Scripts\activate
+# macOS/Linux
+source venv/bin/activate
+
+# 3. 의존성 설치
 pip install -r requirements.txt
 ```
 
-### 3. 로그 폴더 확인
-
-애플리케이션은 `C:\Sync` 폴더에서 로그 파일을 읽도록 기본 설정되어 있습니다. 이 경로는 `app.py` 파일 상단의 `LOG_FOLDER_PATH` 변수에서 변경할 수 있습니다.
-
-### 4. 로컬 개발 서버 실행
-
-다음 명령어를 실행하여 Flask 개발 서버를 시작합니다.
-
+### 3.3. 로컬 환경에서 실행 (Running Locally)
 ```bash
+# 1. 웹 서버 실행 (use_reloader=False 옵션으로 실행 권장)
 python app.py
+
+# 2. 웹 브라우저에서 아래 주소로 접속
+# http://127.0.0.1:8089
 ```
+**참고**: 로그 파일은 `C:\Sync` 폴더에 위치해야 합니다. 이 경로는 `app.py` 상단에 하드코딩되어 있습니다.
 
-서버가 시작되면 웹 브라우저를 열고 `http://127.0.0.1:8088` 주소로 접속하여 대시보드를 확인할 수 있습니다.
+## 4. API 명세 (API Specification)
 
-## 자동 배포 (CI/CD)
+이 애플리케이션은 내부적으로 사용하는 RESTful API를 가지고 있습니다. 모든 응답은 JSON 형식입니다.
 
-이 프로젝트는 GitHub Actions를 사용하여 `main` 브랜치에 변경 사항이 푸시될 때마다 자동으로 서버에 배포되도록 설정되어 있습니다.
+*   `GET /`: 메인 `index.html` 페이지를 렌더링합니다.
+*   `POST /api/data`: 필터 조건을 받아 전체 데이터 분석을 수행하고 결과를 반환합니다.
+*   `GET /api/realtime`: 오늘 날짜 기준의 실시간 현황 데이터를 반환합니다.
+*   `POST /api/trace`: 이력 추적을 위한 검색 조건(WID, 바코드 등)을 받아 추적 결과를 반환합니다.
+*   `POST /api/session_barcodes`: 특정 작업 세션의 상세 바코드 목록을 조회합니다.
+*   `POST /api/export_excel`: 세션 데이터를 받아 Excel 파일로 변환하여 반환합니다.
+*   `POST /api/export_error_log`: 오류 로그 데이터를 받아 CSV 파일로 변환하여 반환합니다.
 
-배포 과정은 `.github/workflows/deploy.yml` 파일에 정의되어 있으며, 서버에서는 `deploy.sh` 스크립트를 실행하여 코드 업데이트, 라이브러리 설치, 서버 재시작을 수행합니다.
+## 5. 배포 가이드 (Deployment)
 
-자동 배포를 활성화하려면 GitHub 저장소의 **Settings > Secrets and variables > Actions** 메뉴에서 다음 Repository secrets를 설정해야 합니다.
+### CI/CD 파이프라인
+*   `.github/workflows/deploy.yml`에 GitHub Actions를 이용한 자동 배포 워크플로우가 정의되어 있습니다.
+*   `main` 브랜치에 코드가 푸시되면, 지정된 원격 서버에 SSH로 접속하여 `deploy.sh` 스크립트를 실행합니다.
+*   `deploy.sh`는 `git pull`, `pip install`, 그리고 `app.py` 서버 재시작(기존 프로세스 종료 후 새로 실행)을 수행합니다.
+*   상세한 서버 설정 방법은 `DEPLOYMENT_GUIDE.md` 문서를 참고하십시오.
 
-- `SERVER_HOST`: 서버의 IP 주소 또는 도메인
-- `SERVER_USERNAME`: SSH 접속 사용자 이름
-- `SSH_PRIVATE_KEY`: 서버 접속용 SSH 비공개 키
+## 6. 트러블슈팅 / FAQ (Troubleshooting)
+
+*   **Q**: `ModuleNotFoundError`가 발생합니다.
+    *   **A**: 가상 환경이 활성화된 상태에서 `pip install -r requirements.txt` 명령어를 실행하여 모든 의존성이 올바르게 설치되었는지 확인하십시오.
+*   **Q**: 데이터가 업데이트되지 않거나 분석이 되지 않습니다.
+    *   **A**: 로그 파일이 `C:\Sync` 폴더에 정확히 위치하는지, 그리고 파일 이름이 `*작업이벤트로그*.csv` 패턴과 일치하는지 확인하십시오. 또한, 서버를 실행한 터미널에 오류 메시지가 출력되지 않았는지 확인이 필요합니다.

@@ -689,7 +689,7 @@ class WorkerAnalysisGUI:
         self.root = root
         self.analyzer = DataAnalyzer()
         self.paned_windows: Dict[str, ttk.PanedWindow] = {}
-        self.scale_factor, self.column_widths, window_geometry, self.pane_positions = self.load_settings()
+        self.scale_factor, self.column_widths, window_geometry, self.pane_positions, self.log_folder_path = self.load_settings()
         
         self.root.title(f"성과 분석 대시보드 v{CURRENT_VERSION}")
         self.root.geometry(window_geometry)
@@ -697,7 +697,6 @@ class WorkerAnalysisGUI:
         self.root.configure(bg=self.COLOR_BG)
         
         self.process_mode_var = tk.StringVar(value="이적실")
-        self.log_folder_path = "C:\\Sync"
         os.makedirs(self.log_folder_path, exist_ok=True)
 
         self.full_df, self.filtered_df_raw, self.realtime_today_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -758,7 +757,7 @@ class WorkerAnalysisGUI:
     def _initial_load(self):
         self.run_analysis(load_new_data=True)
 
-    def load_settings(self) -> Tuple[float, Dict[str, int], str, Dict[str, int]]:
+    def load_settings(self) -> Tuple[float, Dict[str, int], str, Dict[str, int], str]:
         path = resource_path(os.path.join(self.SETTINGS_DIR, self.SETTINGS_FILE))
         try:
             with open(path, 'r', encoding='utf-8') as f:
@@ -767,11 +766,12 @@ class WorkerAnalysisGUI:
             column_widths = settings.get('column_widths', {})
             window_geometry = settings.get('window_geometry', "1600x950")
             pane_positions = settings.get('pane_positions', {})
+            log_folder_path = settings.get('log_folder_path', "C:\\Sync")
             if not pane_positions and 'pane_position' in settings:
                 pane_positions['main'] = int(settings.get('pane_position', 350))
-            return scale_factor, column_widths, window_geometry, pane_positions
+            return scale_factor, column_widths, window_geometry, pane_positions, log_folder_path
         except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError):
-            return 1.0, {}, "1600x950", {'main': 350}
+            return 1.0, {}, "1600x950", {'main': 350}, "C:\\Sync"
 
     def save_settings(self):
         path = resource_path(os.path.join(self.SETTINGS_DIR, self.SETTINGS_FILE))
@@ -788,7 +788,8 @@ class WorkerAnalysisGUI:
                 'scale_factor': self.scale_factor,
                 'column_widths': self.column_widths,
                 'window_geometry': self.root.geometry(),
-                'pane_positions': self.pane_positions
+                'pane_positions': self.pane_positions,
+                'log_folder_path': self.log_folder_path
             }
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=4, ensure_ascii=False)

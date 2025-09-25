@@ -133,14 +133,13 @@ body {
 .listbox-container {
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius);
-    padding: 0.25rem;
-    overflow-y: auto;
+    overflow-y: auto; /* 컨테이너에만 스크롤바 적용 */
     flex: 1;
 }
 #worker-list {
     border: none;
     width: 100%;
-    height: 100%;
+    /* height: 100%; 제거하여 부모의 스크롤을 따르도록 함 */
 }
 #worker-list:focus {
     outline: none;
@@ -288,8 +287,16 @@ input[type="date"]:focus, select:focus {
     border-bottom: 1px solid var(--border-color);
 }
 .data-table th {
-    font-weight: 600;
-    background-color: var(--background-color);
+    position: relative;
+}
+
+.resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 5px;
+    cursor: col-resize;
+    height: 100%;
 }
 .data-table tbody tr:hover {
     background-color: #f1f3f5;
@@ -435,4 +442,20 @@ input[type="date"]:focus, select:focus {
 }
 .tab-header h3 {
     margin: 0;
+}
+
+.pagination-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.pagination-controls button {
+    padding: 0.5rem 1rem;
+}
+
+.pagination-controls span {
+    font-weight: 500;
 }

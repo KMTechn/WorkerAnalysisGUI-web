@@ -14,13 +14,17 @@ from watchdog.events import FileSystemEventHandler
 
 from analyzer import DataAnalyzer, WorkerPerformance
 
-# ####################################################################
-# # 기본 설정
-# ####################################################################
-LOG_FOLDER_PATH = "C:\\Sync"
+def load_settings():
+    try:
+        with open('config/analyzer_settings.json', 'r', encoding='utf-8') as f:
+            settings = json.load(f)
+        return settings.get('log_folder_path', 'C:\\Sync')
+    except (FileNotFoundError, json.JSONDecodeError):
+        return 'C:\\Sync'
+
+LOG_FOLDER_PATH = load_settings()
 if not os.path.isdir(LOG_FOLDER_PATH):
     os.makedirs(LOG_FOLDER_PATH, exist_ok=True)
-    print(f"'{LOG_FOLDER_PATH}' 폴더가 존재하지 않아 새로 생성했습니다.")
 
 # ####################################################################
 # # Flask 및 SocketIO 설정
@@ -78,13 +82,20 @@ def index():
 
 @app.route('/api/data', methods=['POST'])
 def get_analysis_data():
+    print("\n[API] /api/data 요청 시작")
     try:
         filters = request.json
         process_mode = filters.get('process_mode', '이적실')
+        print(f"[API] 공정 모드: {process_mode}")
         
+        print("[API] 데이터 로딩 시작...")
         full_df = analyzer.load_all_data(LOG_FOLDER_PATH, process_mode)
+        print(f"[API] 데이터 로딩 완료. {len(full_df)}개의 세션 데이터 발견.")
+
         if full_df.empty:
+            print("[API] 로드된 데이터가 없어 빈 응답을 반환합니다.")
             return jsonify({ 'kpis': {}, 'worker_data': [], 'normalized_performance': [], 'workers': [], 'date_range': {'min': None, 'max': None}, 'filtered_sessions_data': [], 'filtered_raw_events': [] })
+
 
         start_date = filters.get('start_date') or full_df['date'].dropna().min().strftime('%Y-%m-%d')
         end_date = filters.get('end_date') or full_df['date'].dropna().max().strftime('%Y-%m-%d')
@@ -92,11 +103,16 @@ def get_analysis_data():
         all_workers = sorted(full_df['worker'].astype(str).unique().tolist())
         selected_workers = filters.get('selected_workers') or all_workers
 
+        print("[API] 데이터 필터링 시작...")
         filtered_df = analyzer.filter_data(full_df.copy(), start_date, end_date, selected_workers)
+        print(f"[API] 데이터 필터링 완료. {len(filtered_df)}개의 세션이 필터링됨.")
         
         radar_metrics = RADAR_METRICS_CONFIG.get(process_mode, RADAR_METRICS_CONFIG['이적실'])
+        print("[API] 데이터 분석 시작...")
         worker_data, kpis, _, normalized_df = analyzer.analyze_dataframe(filtered_df, radar_metrics, full_sessions_df=full_df)
+        print("[API] 데이터 분석 완료.")
 
+        print("[API] JSON 직렬화 시작...")
         worker_data_json = [perf.__dict__ for perf in worker_data.values()]
         for item in worker_data_json:
             # JSON으로 직렬화할 수 없는 값들을 처리
@@ -173,6 +189,7 @@ def get_analysis_data():
             
             comparison_data = {'summary_today': summary_today, 'summary_period': summary_period, 'trends': trends_data}
 
+        print("[API] JSON 직렬화 완료. 응답 전송 중...")
         return jsonify({
             'kpis': kpis,
             'worker_data': worker_data_json,
@@ -341,6 +358,42 @@ def export_excel():
         traceback.print_exc()
         return jsonify({"error": f"Excel 내보내기 중 오류: {e}"}), 500
 
+@app.route('/api/export_error_log', methods=['POST'])
+def export_error_log():
+    try:
+        from io import StringIO
+        import csv
+        from flask import Response
+
+        data = request.json
+        error_data = data.get('errors', [])
+        
+        if not error_data:
+            return jsonify({"error": "내보낼 데이터가 없습니다."}), 400
+
+        output = StringIO()
+        writer = csv.writer(output)
+
+        # Write headers
+        writer.writerow(error_data[0].keys())
+
+        # Write data
+        for row in error_data:
+            writer.writerow(row.values())
+
+        output.seek(0)
+
+        return Response(
+            output,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=error_log.csv"}
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"CSV 내보내기 중 오류: {e}"}), 500
+
 
 @app.route('/api/realtime', methods=['GET'])
 def get_realtime_data():
@@ -348,23 +401,51 @@ def get_realtime_data():
         process_mode = request.args.get('process_mode', '이적실')
         today = datetime.now().date()
         
+        # 1. 오늘 데이터 로드 및 분석 (기존 로직)
         today_sessions_df = analyzer.load_all_data(LOG_FOLDER_PATH, process_mode, date_filter=today)
         
-        if today_sessions_df.empty:
-            return jsonify({'worker_status': [], 'item_status': [], 'hourly_production': {'labels': [], 'data': []}})
-
-        worker_summary = today_sessions_df.groupby('worker').agg(pcs_completed=('pcs_completed', 'sum'), avg_work_time=('work_time', 'mean'), session_count=('worker', 'size')).reset_index().sort_values(by='pcs_completed', ascending=False)
-        item_summary = today_sessions_df.groupby('item_display')['pcs_completed'].sum().reset_index().sort_values(by='pcs_completed', ascending=False)
-        item_summary = item_summary[item_summary['pcs_completed'] > 0]
-
+        worker_summary = pd.DataFrame()
+        item_summary = pd.DataFrame()
+        hourly_summary = pd.Series(dtype=float)
         work_hours = range(6, 23)
-        today_sessions_df['hour'] = pd.to_datetime(today_sessions_df['start_time_dt']).dt.hour
-        hourly_summary = today_sessions_df.groupby('hour')['pcs_completed'].sum().reindex(work_hours, fill_value=0)
+
+        if not today_sessions_df.empty:
+            worker_summary = today_sessions_df.groupby('worker').agg(pcs_completed=('pcs_completed', 'sum'), avg_work_time=('work_time', 'mean'), session_count=('worker', 'size')).reset_index().sort_values(by='pcs_completed', ascending=False)
+            
+            # TRAY_COMPLETE 이벤트 수를 직접 카운트하여 파렛트 수량 계산
+            item_summary = today_sessions_df.groupby('item_display').agg(
+                pcs_completed=('pcs_completed', 'sum'),
+                pallet_count=('item_display', 'size')  # 각 그룹의 행 수를 세면 TRAY_COMPLETE 이벤트 수가 됨
+            ).reset_index().sort_values(by='pcs_completed', ascending=False)
+            item_summary = item_summary[item_summary['pcs_completed'] > 0]
+
+            today_sessions_df['hour'] = pd.to_datetime(today_sessions_df['start_time_dt']).dt.hour
+            hourly_summary = today_sessions_df.groupby('hour')['pcs_completed'].sum().reindex(work_hours, fill_value=0)
+
+        # 2. 최근 30일 데이터 로드 및 시간대별 평균 계산
+        all_sessions_df = analyzer.load_all_data(LOG_FOLDER_PATH, process_mode)
+        average_hourly_production = []
+        
+        if not all_sessions_df.empty:
+            all_sessions_df['date_only'] = pd.to_datetime(all_sessions_df['date']).dt.date
+            thirty_days_ago = datetime.now().date() - pd.to_timedelta('30D')
+            recent_sessions_df = all_sessions_df[all_sessions_df['date_only'] >= thirty_days_ago]
+            
+            if not recent_sessions_df.empty:
+                num_days = recent_sessions_df['date_only'].nunique()
+                if num_days > 0:
+                    recent_sessions_df['hour'] = pd.to_datetime(recent_sessions_df['start_time_dt']).dt.hour
+                    total_hourly_summary = recent_sessions_df.groupby('hour')['pcs_completed'].sum().reindex(work_hours, fill_value=0)
+                    average_hourly_production = (total_hourly_summary / num_days).values.tolist()
 
         return jsonify({
             'worker_status': json.loads(worker_summary.to_json(orient='records')),
             'item_status': json.loads(item_summary.to_json(orient='records')),
-            'hourly_production': { 'labels': [f"{h:02d}시" for h in hourly_summary.index], 'data': hourly_summary.values.tolist() }
+            'hourly_production': { 
+                'labels': [f"{h:02d}시" for h in work_hours], 
+                'today': hourly_summary.values.tolist() if not hourly_summary.empty else [0]*len(work_hours),
+                'average': average_hourly_production
+            }
         })
     except Exception as e:
         import traceback

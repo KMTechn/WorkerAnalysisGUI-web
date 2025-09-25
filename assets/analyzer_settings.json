@@ -1,8 +1,10 @@
 {
     "scale_factor": 0.9999999999999992,
+    "log_folder_path": "C:\\Sync",
     "column_widths": {
         "realtime_item_#1": 156,
         "realtime_worker_#1": 275,
+
         "realtime_worker_#2": 221,
         "realtime_worker_#3": 139,
         "realtime_item_생산량 (Pallets)": 277,
