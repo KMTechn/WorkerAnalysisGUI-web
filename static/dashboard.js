@@ -30,12 +30,70 @@ document.addEventListener('DOMContentLoaded', () => {
         },
     };
 
-    const TAB_CONFIG = {
-        "이적실": ["실시간 현황", "생산량 분석", "작업자별 분석", "오류 로그", "생산 이력 추적", "상세 데이터"],
-        "검사실": ["실시간 현황", "검사량 분석", "작업자별 분석", "오류 로그", "생산 이력 추적", "상세 데이터"],
-        "포장실": ["실시간 현황", "생산량 추이 분석", "출고일자별 분석", "오류 로그", "생산 이력 추적", "상세 데이터"],
-        "전체 비교": ["공정 비교 분석", "생산 이력 추적", "상세 데이터"],
-    };
+    // 동적 탭 생성 함수
+    function getTabsForProcess(processMode, dateRange = null) {
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
+        const baseTabs = {
+            "이적실": [
+                isRealTime ? "실시간 현황" : `${periodLabel} 현황`,
+                `${periodLabel} 생산량 분석`,
+                "작업자별 분석",
+                "오류 로그",
+                "생산 이력 추적",
+                "상세 데이터"
+            ],
+            "검사실": [
+                isRealTime ? "실시간 현황" : `${periodLabel} 현황`,
+                `${periodLabel} 검사량 분석`,
+                "작업자별 분석",
+                "오류 로그",
+                "생산 이력 추적",
+                "상세 데이터"
+            ],
+            "포장실": [
+                isRealTime ? "실시간 현황" : `${periodLabel} 현황`,
+                `${periodLabel} 생산량 추이 분석`,
+                "출고일자별 분석",
+                "오류 로그",
+                "생산 이력 추적",
+                "상세 데이터"
+            ],
+            "전체 비교": [
+                `${periodLabel} 공정 비교 분석`,
+                "생산 이력 추적",
+                "상세 데이터"
+            ],
+        };
+        return baseTabs[processMode] || baseTabs["이적실"];
+    }
+
+    function isDateRangeRealTime(dateRange) {
+        if (!dateRange || !dateRange.start_date || !dateRange.end_date) return true;
+
+        const today = new Date().toISOString().split('T')[0];
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+        return (dateRange.start_date === today && dateRange.end_date === today) ||
+               (dateRange.start_date === yesterday && dateRange.end_date === today);
+    }
+
+    function getPeriodLabel(dateRange, isRealTime) {
+        if (isRealTime) return "실시간";
+
+        if (!dateRange || !dateRange.start_date || !dateRange.end_date) return "전체";
+
+        const start = new Date(dateRange.start_date);
+        const end = new Date(dateRange.end_date);
+        const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+
+        if (diffDays <= 1) return "일간";
+        if (diffDays <= 7) return "주간";
+        if (diffDays <= 31) return "월간";
+        if (diffDays <= 93) return "분기";
+        return "기간";
+    }
     
     const RADAR_METRICS_CONFIG = {
         "포장실": { '세트완료시간': 'avg_work_time', '첫스캔준비성': 'avg_latency', '무결점달성률': 'first_pass_yield', '세트당PCS': 'avg_pcs_per_tray' },
@@ -114,6 +172,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         decreaseFontSizeBtn.addEventListener('click', () => changeFontSize(-1));
         increaseFontSizeBtn.addEventListener('click', () => changeFontSize(1));
+
+        // 날짜 프리셋 버튼 이벤트
+        document.querySelectorAll('.btn-preset').forEach(btn => {
+            btn.addEventListener('click', handleDatePreset);
+        });
+
+        // 작업자 필터 컨트롤 이벤트
+        document.getElementById('select-all-workers').addEventListener('click', selectAllWorkers);
+        document.getElementById('deselect-all-workers').addEventListener('click', deselectAllWorkers);
+        document.getElementById('select-top-performers').addEventListener('click', selectTopPerformers);
+
+        // 고급 필터 이벤트
+        document.querySelectorAll('.advanced-filters input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', handleAdvancedFilter);
+        });
     }
 
     // ########################
@@ -122,9 +195,43 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleProcessModeChange(event) {
         if (event.target.name === 'process_mode') {
             state.process_mode = event.target.value;
-            elements.mainTitle.textContent = `${state.process_mode} 대시보드`;
+            updateMainTitle();
             fetchAnalysisData();
         }
+    }
+
+    function handleDatePreset(event) {
+        const preset = event.target.dataset.preset;
+        const today = new Date();
+        let startDate, endDate;
+
+        switch (preset) {
+            case 'today':
+                startDate = endDate = today;
+                break;
+            case 'week':
+                startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+                endDate = today;
+                break;
+            case 'month':
+                startDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+                endDate = today;
+                break;
+            case 'quarter':
+                startDate = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
+                endDate = today;
+                break;
+        }
+
+        elements.startDateInput.value = startDate.toISOString().split('T')[0];
+        elements.endDateInput.value = endDate.toISOString().split('T')[0];
+
+        // 프리셋 버튼 활성화 표시
+        document.querySelectorAll('.btn-preset').forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+
+        // 자동으로 분석 실행
+        fetchAnalysisData();
     }
 
     function resetFiltersAndRunAnalysis() {
@@ -132,10 +239,92 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.startDateInput.value = state.full_data.date_range.min;
             elements.endDateInput.value = state.full_data.date_range.max;
         }
+
+        // 프리셋 버튼 초기화
+        document.querySelectorAll('.btn-preset').forEach(btn => btn.classList.remove('active'));
+
         for (let option of elements.workerList.options) {
             option.selected = true;
         }
         fetchAnalysisData();
+    }
+
+    function selectAllWorkers() {
+        for (let option of elements.workerList.options) {
+            option.selected = true;
+        }
+    }
+
+    function deselectAllWorkers() {
+        for (let option of elements.workerList.options) {
+            option.selected = false;
+        }
+    }
+
+    function selectTopPerformers() {
+        if (!state.full_data || !state.full_data.worker_data) return;
+
+        const topPerformers = state.full_data.worker_data
+            .sort((a, b) => b.overall_score - a.overall_score)
+            .slice(0, Math.ceil(state.full_data.worker_data.length * 0.2))
+            .map(worker => worker.worker);
+
+        for (let option of elements.workerList.options) {
+            option.selected = topPerformers.includes(option.value);
+        }
+    }
+
+    function handleAdvancedFilter(event) {
+        const filterId = event.target.id;
+        const isChecked = event.target.checked;
+
+        if (!state.full_data || !state.full_data.worker_data) return;
+
+        let targetWorkers = [];
+
+        switch (filterId) {
+            case 'filter-high-performance':
+                if (isChecked) {
+                    targetWorkers = state.full_data.worker_data
+                        .sort((a, b) => b.overall_score - a.overall_score)
+                        .slice(0, Math.ceil(state.full_data.worker_data.length * 0.2))
+                        .map(worker => worker.worker);
+                }
+                break;
+
+            case 'filter-recent-errors':
+                if (isChecked) {
+                    targetWorkers = state.full_data.worker_data
+                        .filter(worker => worker.total_process_errors > 0)
+                        .map(worker => worker.worker);
+                }
+                break;
+
+            case 'filter-productivity-decline':
+                if (isChecked) {
+                    // 작업 시간이 평균보다 높은 작업자들 (생산성 하락 추정)
+                    const avgWorkTime = state.full_data.worker_data.reduce((sum, w) => sum + w.avg_work_time, 0) / state.full_data.worker_data.length;
+                    targetWorkers = state.full_data.worker_data
+                        .filter(worker => worker.avg_work_time > avgWorkTime * 1.2)
+                        .map(worker => worker.worker);
+                }
+                break;
+        }
+
+        if (isChecked) {
+            // 체크박스가 선택되면 해당 작업자들만 선택
+            for (let option of elements.workerList.options) {
+                option.selected = targetWorkers.includes(option.value);
+            }
+        } else {
+            // 체크박스가 해제되면 전체 선택
+            selectAllWorkers();
+        }
+
+        // 다른 고급 필터 체크박스들 해제
+        document.querySelectorAll('.advanced-filters input[type="checkbox"]').forEach(cb => {
+            if (cb.id !== filterId) cb.checked = false;
+        });
     }
 
     function handleTabClick(event) {
@@ -209,9 +398,36 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateDashboard(data) {
+        updateMainTitle();
         renderFilterControls(data.workers, data.date_range);
         renderTabs();
         renderActiveTabData();
+    }
+
+    function updateMainTitle() {
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
+        let titleText = `${state.process_mode} 대시보드`;
+
+        if (!isRealTime) {
+            if (dateRange.start_date && dateRange.end_date) {
+                if (dateRange.start_date === dateRange.end_date) {
+                    titleText = `${state.process_mode} ${periodLabel} 분석 (${dateRange.start_date})`;
+                } else {
+                    titleText = `${state.process_mode} ${periodLabel} 분석 (${dateRange.start_date} ~ ${dateRange.end_date})`;
+                }
+            } else {
+                titleText = `${state.process_mode} ${periodLabel} 분석`;
+            }
+        }
+
+        elements.mainTitle.textContent = titleText;
     }
 
     function renderFilterControls(workers, date_range) {
@@ -233,7 +449,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderTabs() {
         elements.tabsContainer.innerHTML = '';
-        const tabsForMode = TAB_CONFIG[state.process_mode];
+
+        // 날짜 범위 정보 생성
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+
+        const tabsForMode = getTabsForProcess(state.process_mode, dateRange);
         tabsForMode.forEach(tabName => {
             const tabButton = document.createElement('button');
             tabButton.className = 'tab-btn';
@@ -1189,10 +1412,34 @@ document.addEventListener('DOMContentLoaded', () => {
     function createTabHeader(title, buttons = [], refreshFn = fetchAnalysisData) {
         const header = document.createElement('div');
         header.className = 'tab-header';
-        
+
+        const titleContainer = document.createElement('div');
+        titleContainer.className = 'tab-title-container';
+
         const h3 = document.createElement('h3');
         h3.textContent = title;
-        header.appendChild(h3);
+        titleContainer.appendChild(h3);
+
+        // 날짜 범위 표시 추가
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+
+        if (dateRange.start_date && dateRange.end_date) {
+            const dateInfo = document.createElement('span');
+            dateInfo.className = 'date-range-indicator';
+
+            if (dateRange.start_date === dateRange.end_date) {
+                dateInfo.textContent = `📅 ${dateRange.start_date}`;
+            } else {
+                dateInfo.textContent = `📅 ${dateRange.start_date} ~ ${dateRange.end_date}`;
+            }
+
+            titleContainer.appendChild(dateInfo);
+        }
+
+        header.appendChild(titleContainer);
 
         const buttonContainer = document.createElement('div');
         buttonContainer.className = 'tab-header-actions';

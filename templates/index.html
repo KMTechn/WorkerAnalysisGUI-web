@@ -43,15 +43,52 @@
 
                 <div class="filter-group">
                     <label class="filter-label">분석 기간</label>
-                    <input type="date" id="start-date-input">
-                    <span>~</span>
-                    <input type="date" id="end-date-input">
+                    <div class="date-presets">
+                        <button type="button" class="btn-preset" data-preset="today">오늘</button>
+                        <button type="button" class="btn-preset" data-preset="week">1주일</button>
+                        <button type="button" class="btn-preset" data-preset="month">1개월</button>
+                        <button type="button" class="btn-preset" data-preset="quarter">분기</button>
+                    </div>
+                    <div class="date-inputs">
+                        <input type="date" id="start-date-input" placeholder="시작일">
+                        <span>~</span>
+                        <input type="date" id="end-date-input" placeholder="종료일">
+                    </div>
                 </div>
 
                 <div class="filter-group filter-group-expand">
                     <label for="worker-list" class="filter-label">작업자 선택</label>
+                    <div class="worker-filter-controls">
+                        <button type="button" id="select-all-workers" class="btn-control">전체선택</button>
+                        <button type="button" id="deselect-all-workers" class="btn-control">전체해제</button>
+                        <button type="button" id="select-top-performers" class="btn-control">우수자만</button>
+                    </div>
                     <div class="listbox-container">
                         <select id="worker-list" multiple></select>
+                    </div>
+                </div>
+
+                <div class="filter-group">
+                    <label class="filter-label">고급 필터</label>
+                    <div class="advanced-filters">
+                        <div class="filter-option">
+                            <label>
+                                <input type="checkbox" id="filter-high-performance" value="high-performance">
+                                고성과자만 (상위 20%)
+                            </label>
+                        </div>
+                        <div class="filter-option">
+                            <label>
+                                <input type="checkbox" id="filter-recent-errors" value="recent-errors">
+                                최근 오류 발생자
+                            </label>
+                        </div>
+                        <div class="filter-option">
+                            <label>
+                                <input type="checkbox" id="filter-productivity-decline" value="productivity-decline">
+                                생산성 하락 추세
+                            </label>
+                        </div>
                     </div>
                 </div>
 
