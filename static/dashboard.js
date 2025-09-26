@@ -590,44 +590,177 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderProductionTab(pane, data) {
-        // 동적 제목 생성 - 이미 state.active_tab에 올바른 제목이 있음
+        // 기간 정보 가져오기
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
+        // 동적 제목 생성
         pane.appendChild(createTabHeader(state.active_tab));
         const content = document.createElement('div');
         pane.appendChild(content);
 
+        // 기간별 KPI 계산 개선
+        const kpis = calculatePeriodAwareKPIs(data, dateRange, isRealTime);
+
         content.innerHTML = `
             <div class="kpi-grid">
-                ${createCard('평균 트레이 작업시간', formatSeconds(data.kpis.avg_tray_time || 0))}
-                ${createCard('평균 작업 준비시간', formatSeconds(data.kpis.avg_latency || 0))}
-                ${createCard('초도 수율 (FPY)', `${(data.kpis.avg_fpy * 100).toFixed(1)}%`, 'positive')}
+                ${createCard('평균 트레이 작업시간', formatSeconds(kpis.avg_tray_time || 0))}
+                ${createCard('평균 작업 준비시간', formatSeconds(kpis.avg_latency || 0))}
+                ${createCard('초도 수율 (FPY)', `${(kpis.avg_fpy * 100).toFixed(1)}%`, 'positive')}
+                ${createCard(`${periodLabel} 총 생산량`, `${kpis.total_production.toLocaleString()} PCS`, 'positive')}
             </div>
             <div class="card">
-                 <div class="chart-container"><canvas id="production-trend-chart"></canvas></div>
+                <h4 style="margin-bottom: 1rem;">${periodLabel} 생산량 추이</h4>
+                <div class="chart-container"><canvas id="production-trend-chart"></canvas></div>
             </div>`;
-        
-        const sessions = data.filtered_sessions_data;
-        const productionByDate = sessions.reduce((acc, session) => {
-            const date = session.date.split('T')[0];
-            acc[date] = (acc[date] || 0) + session.pcs_completed;
-            return acc;
-        }, {});
-        
-        const sortedDates = Object.keys(productionByDate).sort();
-        createChart('production-trend-chart', 'line', {
-            labels: sortedDates,
-            datasets: [{
-                label: '일별 총 생산량 (PCS)',
-                data: sortedDates.map(date => productionByDate[date]),
-                borderColor: 'var(--color-primary)',
-                backgroundColor: 'rgba(0, 82, 204, 0.1)',
-                fill: true,
-                tension: 0.1
-            }]
-        }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } });
+
+        // 기간별 차트 데이터 생성
+        generatePeriodAwareProductionChart(data, dateRange, isRealTime, periodLabel);
+    }
+
+    function calculatePeriodAwareKPIs(data, dateRange, isRealTime) {
+        const sessions = data.filtered_sessions_data || [];
+
+        const kpis = {
+            avg_tray_time: data.kpis?.avg_tray_time || 0,
+            avg_latency: data.kpis?.avg_latency || 0,
+            avg_fpy: data.kpis?.avg_fpy || 0,
+            total_production: sessions.reduce((sum, session) => sum + (session.pcs_completed || 0), 0)
+        };
+
+        return kpis;
+    }
+
+    function generatePeriodAwareProductionChart(data, dateRange, isRealTime, periodLabel) {
+        const sessions = data.filtered_sessions_data || [];
+
+        let chartData;
+        let chartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: '생산량 (PCS)'
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: true
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false
+                }
+            }
+        };
+
+        if (isRealTime || isDateRangeSingleDay(dateRange)) {
+            // 실시간/일간: 시간별 생산량
+            const productionByHour = sessions.reduce((acc, session) => {
+                const hour = new Date(session.date).getHours();
+                acc[hour] = (acc[hour] || 0) + (session.pcs_completed || 0);
+                return acc;
+            }, {});
+
+            const hourLabels = Array.from({length: 24}, (_, i) => `${i}:00`);
+            const hourData = hourLabels.map((_, hour) => productionByHour[hour] || 0);
+
+            chartData = {
+                labels: hourLabels,
+                datasets: [{
+                    label: '시간별 생산량 (PCS)',
+                    data: hourData,
+                    borderColor: 'var(--color-primary)',
+                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                    fill: true,
+                    tension: 0.3
+                }]
+            };
+        } else if (isDateRangeWeekly(dateRange)) {
+            // 주간: 일별 생산량
+            const productionByDate = sessions.reduce((acc, session) => {
+                const date = session.date.split('T')[0];
+                acc[date] = (acc[date] || 0) + (session.pcs_completed || 0);
+                return acc;
+            }, {});
+
+            const sortedDates = Object.keys(productionByDate).sort();
+            const labels = sortedDates.map(date => new Date(date).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' }));
+            const data = sortedDates.map(date => productionByDate[date] || 0);
+
+            chartData = {
+                labels: labels,
+                datasets: [{
+                    label: '일별 생산량 (PCS)',
+                    data: data,
+                    backgroundColor: 'var(--color-primary)',
+                    borderColor: 'var(--color-primary)',
+                    borderWidth: 1
+                }]
+            };
+
+            // 막대 차트로 변경
+            createChart('production-trend-chart', 'bar', chartData, chartOptions);
+            return;
+        } else {
+            // 월간/분기: 주별 생산량
+            const productionByWeek = {};
+
+            sessions.forEach(session => {
+                const date = new Date(session.date);
+                const weekStart = new Date(date);
+                weekStart.setDate(date.getDate() - date.getDay());
+                const weekKey = weekStart.toISOString().split('T')[0];
+
+                productionByWeek[weekKey] = (productionByWeek[weekKey] || 0) + (session.pcs_completed || 0);
+            });
+
+            const sortedWeeks = Object.keys(productionByWeek).sort();
+            const labels = sortedWeeks.map(weekStart => {
+                const start = new Date(weekStart);
+                const end = new Date(start);
+                end.setDate(end.getDate() + 6);
+                return `${start.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} ~ ${end.toLocaleDateString('ko-KR', { day: 'numeric' })}`;
+            });
+            const data = sortedWeeks.map(week => productionByWeek[week] || 0);
+
+            chartData = {
+                labels: labels,
+                datasets: [{
+                    label: '주별 생산량 (PCS)',
+                    data: data,
+                    backgroundColor: 'var(--color-success)',
+                    borderColor: 'var(--color-success)',
+                    borderWidth: 1
+                }]
+            };
+
+            // 막대 차트로 변경
+            createChart('production-trend-chart', 'bar', chartData, chartOptions);
+            return;
+        }
+
+        createChart('production-trend-chart', 'line', chartData, chartOptions);
     }
 
     function renderWorkerDetailTab(pane, data) {
-        pane.appendChild(createTabHeader('작업자별 분석'));
+        // 기간 정보 가져오기
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
+        pane.appendChild(createTabHeader(`${periodLabel} 작업자별 분석`));
         const content = document.createElement('div');
         pane.appendChild(content);
 
@@ -877,7 +1010,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderErrorLogTab(pane, data) {
-        const errorEvents = (data.filtered_raw_events || []).filter(event => 
+        // 기간 정보 가져오기
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
+        const errorEvents = (data.filtered_raw_events || []).filter(event =>
             event.event && (event.event.toLowerCase().includes('error') ||
             event.event.toLowerCase().includes('fail') ||
             event.event.toLowerCase().includes('cancel'))
@@ -888,11 +1029,11 @@ document.addEventListener('DOMContentLoaded', () => {
             className: 'btn',
             onClick: () => {
                 if (errorEvents.length > 0) {
-                    exportErrorLogToCSV(errorEvents, `error_log_${new Date().toISOString().split('T')[0]}.csv`);
+                    exportErrorLogToCSV(errorEvents, `${periodLabel}_error_log_${new Date().toISOString().split('T')[0]}.csv`);
                 }
             }
         };
-        pane.appendChild(createTabHeader('오류 로그', [exportButton]));
+        pane.appendChild(createTabHeader(`${periodLabel} 오류 로그`, [exportButton]));
         
         const content = document.createElement('div');
         pane.appendChild(content);
@@ -918,7 +1059,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderTraceabilityTab(pane, data) {
-        pane.appendChild(createTabHeader('생산 이력 추적'));
+        // 기간 정보 가져오기
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
+        pane.appendChild(createTabHeader(`${periodLabel} 생산 이력 추적`));
         const content = document.createElement('div');
         pane.appendChild(content);
 
@@ -1063,6 +1212,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function renderFullDataTableTab(pane, data) {
+        // 기간 정보 가져오기
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
         const sessions = data.filtered_sessions_data;
         const totalRows = sessions.length;
         const totalPages = Math.ceil(totalRows / state.detailed_data.rows_per_page);
@@ -1081,7 +1238,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         };
-        pane.appendChild(createTabHeader('상세 데이터', [exportButton]));
+        pane.appendChild(createTabHeader(`${periodLabel} 상세 데이터`, [exportButton]));
         
         const content = document.createElement('div');
         pane.appendChild(content);
@@ -1139,15 +1296,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderComparisonTab(pane, data) {
+        // 기간 정보 가져오기
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
         if (!data.comparison_data) {
             pane.innerHTML = '<p>비교 데이터를 불러올 수 없습니다. 필터 조건을 확인해주세요.</p>';
             return;
         }
-        
+
         pane.innerHTML = `
             <div class="card">
                 <div class="tab-header">
-                    <h3>전체 공정 비교 (검사 → 이적 → 포장)</h3>
+                    <h3>${periodLabel} 전체 공정 비교 (검사 → 이적 → 포장)</h3>
                     <div id="comparison-summary-period-radios" class="period-radios">
                         <label><input type="radio" name="comp_summary_period" value="today" checked><span>당일</span></label>
                         <label><input type="radio" name="comp_summary_period" value="period"><span>선택 기간</span></label>
@@ -1356,7 +1521,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderShippingDateTab(pane, data) {
-        pane.appendChild(createTabHeader('출고일자별 생산량 (최근 7일)'));
+        // 기간 정보 가져오기
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+
+        pane.appendChild(createTabHeader(`${periodLabel} 출고일자별 생산량`));
         const content = document.createElement('div');
         pane.appendChild(content);
 
@@ -1577,11 +1750,95 @@ document.addEventListener('DOMContentLoaded', () => {
         return header;
     }
 
-    function createChart(canvasId, type, data, options) {
+    function createChart(canvasId, type, data, options = {}) {
         const ctx = document.getElementById(canvasId)?.getContext('2d');
         if (!ctx) return;
         if (state.charts[canvasId]) state.charts[canvasId].destroy();
-        state.charts[canvasId] = new Chart(ctx, { type, data, options });
+
+        // 기본 차트 옵션 설정
+        const defaultOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        padding: 15,
+                        usePointStyle: true,
+                        font: {
+                            family: 'Poppins, sans-serif'
+                        }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                    titleColor: '#ffffff',
+                    bodyColor: '#ffffff',
+                    borderColor: 'var(--color-primary)',
+                    borderWidth: 1,
+                    cornerRadius: 6,
+                    displayColors: false
+                }
+            },
+            scales: type !== 'doughnut' && type !== 'pie' ? {
+                x: {
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    },
+                    ticks: {
+                        font: {
+                            family: 'Poppins, sans-serif'
+                        }
+                    }
+                },
+                y: {
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    },
+                    ticks: {
+                        font: {
+                            family: 'Poppins, sans-serif'
+                        }
+                    }
+                }
+            } : undefined,
+            animation: {
+                duration: 1000,
+                easing: 'easeInOutQuart'
+            }
+        };
+
+        // 사용자 옵션과 기본 옵션 병합
+        const mergedOptions = mergeDeep(defaultOptions, options);
+
+        state.charts[canvasId] = new Chart(ctx, {
+            type,
+            data,
+            options: mergedOptions
+        });
+    }
+
+    // 깊은 객체 병합 유틸리티 함수
+    function mergeDeep(target, source) {
+        const output = Object.assign({}, target);
+        if (isObject(target) && isObject(source)) {
+            Object.keys(source).forEach(key => {
+                if (isObject(source[key])) {
+                    if (!(key in target))
+                        Object.assign(output, { [key]: source[key] });
+                    else
+                        output[key] = mergeDeep(target[key], source[key]);
+                } else {
+                    Object.assign(output, { [key]: source[key] });
+                }
+            });
+        }
+        return output;
+    }
+
+    function isObject(item) {
+        return item && typeof item === 'object' && !Array.isArray(item);
     }
     
             function createTable(headers, rows, useRowId = false, tableId = null) {

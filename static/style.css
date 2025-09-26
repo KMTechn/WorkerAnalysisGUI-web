@@ -382,9 +382,18 @@ input[type="date"]:focus, select:focus {
 }
 .kpi-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 1rem;
     margin-bottom: 1.5rem;
+}
+
+.kpi-grid .card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.kpi-grid .card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
 }
 .card-title {
     font-size: 0.9rem;
@@ -439,6 +448,22 @@ input[type="date"]:focus, select:focus {
     position: relative;
     height: 300px;
     width: 100%;
+    background-color: var(--component-bg);
+    border-radius: var(--border-radius);
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+}
+
+.chart-container h4 {
+    margin: 0 0 1rem 0;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-color);
+    text-align: center;
+}
+
+.chart-container canvas {
+    border-radius: calc(var(--border-radius) - 0.25rem);
 }
 
 /* --- 로딩 오버레이 (Loading Overlay) --- */
