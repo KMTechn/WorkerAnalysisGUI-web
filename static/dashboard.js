@@ -494,19 +494,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function getRenderFunctionForTab(tabName) {
+        // 동적 탭 이름을 기본 키워드로 매핑
+        const normalizedName = normalizeTabName(tabName);
+
         const mapping = {
-            '실시간 현황': renderRealtimeTab,
-            '생산량 분석': renderProductionTab,
-            '검사량 분석': renderProductionTab,
-            '생산량 추이 분석': renderProductionTab,
-            '작업자별 분석': renderWorkerDetailTab,
-            '오류 로그': renderErrorLogTab,
-            '생산 이력 추적': renderTraceabilityTab,
-            '상세 데이터': renderFullDataTableTab,
-            '공정 비교 분석': renderComparisonTab,
-            '출고일자별 분석': renderShippingDateTab,
+            '현황': renderRealtimeTab,
+            '생산량분석': renderProductionTab,
+            '검사량분석': renderProductionTab,
+            '생산량추이분석': renderProductionTab,
+            '작업자별분석': renderWorkerDetailTab,
+            '오류로그': renderErrorLogTab,
+            '생산이력추적': renderTraceabilityTab,
+            '상세데이터': renderFullDataTableTab,
+            '공정비교분석': renderComparisonTab,
+            '출고일자별분석': renderShippingDateTab,
         };
-        return mapping[tabName] || ((pane) => pane.innerHTML = `<p>${tabName} 탭을 찾을 수 없습니다.</p>`);
+
+        return mapping[normalizedName] || ((pane) => pane.innerHTML = `<p>${tabName} 탭을 찾을 수 없습니다.</p>`);
+    }
+
+    function normalizeTabName(tabName) {
+        // 기간 표시를 제거하고 핵심 키워드만 추출
+        return tabName
+            .replace(/^(실시간|일간|주간|월간|분기|기간)\s*/, '')  // 기간 prefix 제거
+            .replace(/\s+/g, '')  // 공백 제거
+            .toLowerCase();
     }
 
     // ########################
@@ -514,8 +526,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
 
     async function renderRealtimeTab(pane) {
-        pane.appendChild(createTabHeader('실시간 현황 (오늘)', [], () => renderActiveTabData()));
-        
+        // 동적 제목 생성
+        const dateRange = {
+            start_date: elements.startDateInput.value,
+            end_date: elements.endDateInput.value
+        };
+        const isRealTime = isDateRangeRealTime(dateRange);
+        const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const title = isRealTime ? '실시간 현황 (오늘)' : `${periodLabel} 현황`;
+
+        pane.appendChild(createTabHeader(title, [], () => renderActiveTabData()));
+
         const content = document.createElement('div');
         pane.appendChild(content);
         content.innerHTML = `
@@ -588,6 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderProductionTab(pane, data) {
+        // 동적 제목 생성 - 이미 state.active_tab에 올바른 제목이 있음
         pane.appendChild(createTabHeader(state.active_tab));
         const content = document.createElement('div');
         pane.appendChild(content);
