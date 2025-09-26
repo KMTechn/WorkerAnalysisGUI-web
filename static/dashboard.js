@@ -580,31 +580,12 @@ document.addEventListener('DOMContentLoaded', () => {
             itemStatusEl.innerHTML += '<p>데이터 없음</p>';
         }
 
-        const datasets = [
-            {
-                type: 'bar',
-                label: '오늘 생산량',
-                data: realtimeData.hourly_production.today,
-                backgroundColor: 'rgba(0, 82, 204, 0.6)',
-            }
-        ];
-
-        if (realtimeData.hourly_production.average && realtimeData.hourly_production.average.length > 0) {
-            datasets.unshift({
-                type: 'line',
-                label: '최근 30일 평균',
-                data: realtimeData.hourly_production.average,
-                borderColor: 'rgba(255, 99, 132, 0.8)',
-                backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                borderWidth: 2,
-                fill: false,
-                tension: 0.1
-            });
-        }
+        // 기간에 맞는 차트 데이터 및 레이블 생성
+        const chartData = generatePeriodAwareChartData(realtimeData, dateRange, isRealTime, periodLabel);
 
         createChart('realtime-hourly-chart', 'bar', {
-            labels: realtimeData.hourly_production.labels,
-            datasets: datasets
+            labels: chartData.labels,
+            datasets: chartData.datasets
         }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { text: '완료 PCS 수', display: true } } } });
     }
 
@@ -1417,16 +1398,127 @@ document.addEventListener('DOMContentLoaded', () => {
         content.appendChild(container);
     }
 
-
     // ########################
-    // ### 유틸리티 함수 ###
+    // ### 차트 데이터 생성 함수 ###
     // ########################
 
+    function generatePeriodAwareChartData(realtimeData, dateRange, isRealTime, periodLabel) {
+        if (isRealTime) {
+            // 실시간: 기존 시간별 차트
+            const datasets = [
+                {
+                    type: 'bar',
+                    label: '오늘 생산량',
+                    data: realtimeData.hourly_production.today,
+                    backgroundColor: 'rgba(0, 82, 204, 0.6)',
+                }
+            ];
 
-    // ########################
-    // ### 유틸리티 함수 ###
-    // ########################""
+            if (realtimeData.hourly_production.average && realtimeData.hourly_production.average.length > 0) {
+                datasets.unshift({
+                    type: 'line',
+                    label: '최근 30일 평균',
+                    data: realtimeData.hourly_production.average,
+                    borderColor: 'rgba(255, 99, 132, 0.8)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.1
+                });
+            }
 
+            return {
+                labels: realtimeData.hourly_production.labels,
+                datasets: datasets
+            };
+        } else {
+            // 기간별: 동적 레이블과 데이터
+            return generatePeriodBasedChart(dateRange, periodLabel, realtimeData);
+        }
+    }
+
+    function generatePeriodBasedChart(dateRange, periodLabel, realtimeData) {
+        const startDate = new Date(dateRange.start_date);
+        const endDate = new Date(dateRange.end_date);
+        const diffDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+
+        let labels = [];
+        let chartData = [];
+        let chartTitle = '';
+
+        if (diffDays <= 1) {
+            // 일간: 시간별 (기존과 동일)
+            labels = realtimeData.hourly_production.labels;
+            chartData = realtimeData.hourly_production.today;
+            chartTitle = '시간별 생산량';
+        } else if (diffDays <= 7) {
+            // 주간: 일별
+            labels = generateDateLabels(startDate, endDate, 'day');
+            chartData = generateAggregatedData(realtimeData, labels, 'day');
+            chartTitle = '일별 생산량';
+        } else if (diffDays <= 31) {
+            // 월간: 일별 (너무 많으면 주별)
+            if (diffDays <= 14) {
+                labels = generateDateLabels(startDate, endDate, 'day');
+                chartData = generateAggregatedData(realtimeData, labels, 'day');
+                chartTitle = '일별 생산량';
+            } else {
+                labels = generateDateLabels(startDate, endDate, 'week');
+                chartData = generateAggregatedData(realtimeData, labels, 'week');
+                chartTitle = '주별 생산량';
+            }
+        } else {
+            // 분기: 주별
+            labels = generateDateLabels(startDate, endDate, 'week');
+            chartData = generateAggregatedData(realtimeData, labels, 'week');
+            chartTitle = '주별 생산량';
+        }
+
+        return {
+            labels: labels,
+            datasets: [
+                {
+                    type: 'bar',
+                    label: chartTitle,
+                    data: chartData,
+                    backgroundColor: 'rgba(0, 82, 204, 0.6)',
+                }
+            ]
+        };
+    }
+
+    function generateDateLabels(startDate, endDate, groupBy) {
+        const labels = [];
+        const current = new Date(startDate);
+
+        while (current <= endDate) {
+            if (groupBy === 'day') {
+                labels.push(current.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' }));
+                current.setDate(current.getDate() + 1);
+            } else if (groupBy === 'week') {
+                const weekStart = new Date(current);
+                const weekEnd = new Date(current);
+                weekEnd.setDate(weekEnd.getDate() + 6);
+
+                labels.push(`${weekStart.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} ~ ${weekEnd.toLocaleDateString('ko-KR', { day: 'numeric' })}`);
+                current.setDate(current.getDate() + 7);
+            }
+        }
+
+        return labels;
+    }
+
+    function generateAggregatedData(realtimeData, labels, groupBy) {
+        // 실제 데이터가 없는 경우 샘플 데이터 생성
+        // 실제 구현에서는 백엔드에서 집계된 데이터를 받아와야 함
+        const baseValue = realtimeData.hourly_production.today.reduce((a, b) => a + b, 0);
+
+        return labels.map((label, index) => {
+            // 임시 로직: 날짜별/주별로 변동을 주어 샘플 데이터 생성
+            const variation = Math.random() * 0.4 + 0.8; // 80% ~ 120% 범위
+            return Math.floor(baseValue * variation);
+        });
+    }
 
     // ########################
     // ### 유틸리티 함수 ###
