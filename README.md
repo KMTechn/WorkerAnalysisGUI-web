@@ -16,7 +16,7 @@
 ## 1. 개요
 
 ### 목적 (Purpose)
-로컬 파일 시스템(`C:\Sync`)에 저장되는 CSV 형식의 작업 이벤트 로그를 지속적으로 모니터링하고, 데이터를 자동으로 분석하여 그 결과를 웹 기반 대시보드를 통해 사용자에게 직관적으로 제공합니다. 이를 통해 데이터 기반의 신속한 의사결정을 지원하고 생산성 및 공정 효율 개선에 기여하는 것을 목적으로 합니다.
+Syncthing을 통해 실시간 동기화되는 CSV 형식의 작업 이벤트 로그를 지속적으로 모니터링하고, 데이터를 자동으로 분석하여 그 결과를 웹 기반 대시보드를 통해 사용자에게 직관적으로 제공합니다. 이를 통해 데이터 기반의 신속한 의사결정을 지원하고 생산성 및 공정 효율 개선에 기여하는 것을 목적으로 합니다.
 
 ### 주요 기능 (Key Features)
 *   **실시간 데이터 분석 및 시각화**: `watchdog`을 이용해 로그 파일을 실시간으로 감지하고, `Flask-SocketIO`를 통해 분석 결과를 웹 대시보드에 즉시 업데이트합니다.
@@ -53,12 +53,15 @@
                                                                     | 파일 읽기
                                                                     v
                                                             +-------------------+
-                                                            |  파일 시스템      |
-                                                            |  (C:\Sync\*.csv)  |
+                                                            |  Syncthing 백업   |
+                                                            |  (/home/syncthing/|
+                                                            |   backup/*.csv)   |
 +-------------------+                                       +-------------------+
 | Watchdog 감시자   | --------------------------------------> |                   |
-| (백그라운드 스레드)|   파일 변경 이벤트 감지               +-------------------+
-+-------------------+
+| (백그라운드 스레드)|   파일 변경 이벤트 감지               | - 실시간 동기화   |
++-------------------+                                       | - 버전 관리       |
+                                                            | - 아카이브 백업   |
+                                                            +-------------------+
 ```
 
 **주요 구성 요소 설명**:
@@ -120,9 +123,59 @@ python app.py
 # 2. 웹 브라우저에서 아래 주소로 접속
 # http://127.0.0.1:8089
 ```
-**참고**: 로그 파일은 `C:\Sync` 폴더에 위치해야 합니다. 이 경로는 `app.py` 상단에 하드코딩되어 있습니다.
+**참고**: 로그 파일은 Syncthing을 통해 `/home/syncthing/backup/` 폴더로 실시간 동기화됩니다. 이 경로는 `config/analyzer_settings.json`에서 설정할 수 있습니다.
 
-## 4. API 명세 (API Specification)
+## 4. 데이터 동기화 및 백업 시스템 (Data Sync & Backup)
+
+### 4.1. Syncthing 구성
+
+#### 연결된 디바이스 (8대)
+- **작업 PC들** (7대):
+  - 박관호, 박관호 데스크톱
+  - 이적1_컴퓨터, 이적2_컴퓨터, 이적3_컴퓨터
+  - 검사1_컴퓨터, 포장_컴퓨터
+- **서버** (1대): 중앙 백업 및 데이터 분석
+
+#### 백업 정책
+- **PC별 보관**: 30일 후 로컬 자동 삭제 (용량 절약)
+- **서버 보관**: 영구 보관 (모든 데이터 안전)
+- **분기별 백업**: 자동 압축 아카이브
+
+### 4.2. 데이터 구조
+
+#### 현재 백업 디렉토리 구조
+```
+/home/syncthing/backup/
+├── *작업이벤트로그*.csv           # 최신 파일들 (실시간 동기화)
+├── 2025-08-27/                    # 날짜별 아카이브
+│   ├── 이적작업이벤트로그_권홍규_20250827.csv
+│   ├── 포장실작업이벤트로그_박관호_20250827.csv
+│   └── ...
+├── 2025-08-28/
+├── 2025-09-XX/                    # 자동 날짜별 백업
+└── quarterly_backup/              # 분기별 압축 백업
+    ├── Q1-2025/
+    ├── Q2-2025/
+    └── Q1-2025_backup.tar.gz     # 압축된 분기 백업
+```
+
+#### 데이터 분석 로직 개선
+- **실시간 분석**: 메인 폴더 + 날짜별 아카이브에서 검색
+- **전체 분석**: 177개 파일 인식 (메인: 108 + 아카이브: 69)
+- **분기별 데이터**: quarterly_backup 폴더 자동 포함
+- **호환성 유지**: 기존 log 폴더 구조도 지원
+
+### 4.3. 자동화 스크립트
+
+#### 분기별 백업 관리
+- **위치**: `/home/syncthing/quarterly_backup_setup.sh`
+- **실행**: 매월 1일 새벽 2시 (crontab)
+- **기능**:
+  - 월별 CSV 파일 자동 아카이브
+  - 분기말 자동 압축 (tar.gz)
+  - 디스크 사용량 모니터링
+
+## 5. API 명세 (API Specification)
 
 이 애플리케이션은 내부적으로 사용하는 RESTful API를 가지고 있습니다. 모든 응답은 JSON 형식입니다.
 
@@ -134,17 +187,143 @@ python app.py
 *   `POST /api/export_excel`: 세션 데이터를 받아 Excel 파일로 변환하여 반환합니다.
 *   `POST /api/export_error_log`: 오류 로그 데이터를 받아 CSV 파일로 변환하여 반환합니다.
 
-## 5. 배포 가이드 (Deployment)
+## 6. 배포 가이드 (Deployment)
 
-### CI/CD 파이프라인
+### 6.1. 서버 환경 구성
+
+#### 시스템 서비스
+- **서비스 이름**: `worker-analysis.service`
+- **서비스 파일**: `/etc/systemd/system/worker-analysis.service`
+- **실행 포트**: 8089
+- **접속 URL**: http://worker.kmtecherp.com
+
+#### 서비스 관리 명령어
+```bash
+# 서비스 시작/중지/재시작
+sudo systemctl start worker-analysis
+sudo systemctl stop worker-analysis
+sudo systemctl restart worker-analysis
+
+# 서비스 상태 확인
+sudo systemctl status worker-analysis
+
+# 로그 확인
+journalctl -u worker-analysis -f
+```
+
+### 6.2. Nginx 설정
+
+#### 리버스 프록시 설정
+- **설정 파일**: `/etc/nginx/sites-available/worker-analysis.conf`
+- **도메인**: worker.kmtecherp.com → localhost:8089
+- **SSL**: 추후 Let's Encrypt 설정 가능
+
+### 6.3. Syncthing 설정
+
+#### 서버측 설정 (영구 보관)
+```bash
+# Syncthing 웹 UI 접속
+http://localhost:8384 (사용자: kmtech)
+
+# 설정 위치
+/home/syncthing/.local/state/syncthing/config.xml
+
+# 백업 정책: cleanoutDays = 0 (영구 보관)
+```
+
+#### 각 PC 설정 (30일 보관)
+```bash
+# 각 PC에서 웹 UI 접속
+http://localhost:8384
+
+# 폴더 설정
+1. 폴더 → Server → 편집
+2. 파일 버전 관리 → Trash Can File Versioning
+3. Clean out after: 30 (일)
+4. 저장
+```
+
+### 6.4. CI/CD 파이프라인
 *   `.github/workflows/deploy.yml`에 GitHub Actions를 이용한 자동 배포 워크플로우가 정의되어 있습니다.
 *   `main` 브랜치에 코드가 푸시되면, 지정된 원격 서버에 SSH로 접속하여 `deploy.sh` 스크립트를 실행합니다.
-*   `deploy.sh`는 `git pull`, `pip install`, 그리고 `app.py` 서버 재시작(기존 프로세스 종료 후 새로 실행)을 수행합니다.
-*   상세한 서버 설정 방법은 `DEPLOYMENT_GUIDE.md` 문서를 참고하십시오.
+*   `deploy.sh`는 `git pull`, `pip install`, 그리고 서비스 재시작을 수행합니다.
 
-## 6. 트러블슈팅 / FAQ (Troubleshooting)
+### 6.5. 모니터링 및 유지보수
+
+#### 디스크 사용량 체크
+```bash
+# 백업 디렉토리 크기 확인
+du -sh /home/syncthing/backup/
+
+# 분기별 백업 상태 확인
+ls -la /home/syncthing/quarterly_backup/
+
+# 자동 백업 스크립트 상태
+crontab -l
+```
+
+#### 데이터 분석 현황
+- **총 로그 파일**: 177개
+- **데이터 행수**: 5,275행
+- **실시간 업데이트**: Syncthing을 통한 자동 동기화
+
+## 7. 트러블슈팅 / FAQ (Troubleshooting)
+
+### 7.1. 일반적인 문제
 
 *   **Q**: `ModuleNotFoundError`가 발생합니다.
     *   **A**: 가상 환경이 활성화된 상태에서 `pip install -r requirements.txt` 명령어를 실행하여 모든 의존성이 올바르게 설치되었는지 확인하십시오.
+
 *   **Q**: 데이터가 업데이트되지 않거나 분석이 되지 않습니다.
-    *   **A**: 로그 파일이 `C:\Sync` 폴더에 정확히 위치하는지, 그리고 파일 이름이 `*작업이벤트로그*.csv` 패턴과 일치하는지 확인하십시오. 또한, 서버를 실행한 터미널에 오류 메시지가 출력되지 않았는지 확인이 필요합니다.
+    *   **A**: 다음 사항들을 확인하십시오:
+        - Syncthing 서비스가 정상 실행 중인지 (`systemctl status syncthing@syncthing`)
+        - 백업 폴더에 CSV 파일이 있는지 (`ls /home/syncthing/backup/*.csv`)
+        - 파일 이름이 `*작업이벤트로그*.csv` 패턴과 일치하는지
+        - 서비스 로그에 오류가 없는지 (`journalctl -u worker-analysis -f`)
+
+### 7.2. Syncthing 관련 문제
+
+*   **Q**: PC에서 Syncthing 동기화가 되지 않습니다.
+    *   **A**: 다음 순서로 확인하십시오:
+        1. 네트워크 연결 상태 확인
+        2. Syncthing 웹 UI에서 디바이스 연결 상태 확인 (`http://localhost:8384`)
+        3. 방화벽에서 포트 22000번 허용 확인
+        4. 디바이스 ID가 서버에 등록되어 있는지 확인
+
+*   **Q**: 백업 용량이 계속 증가합니다.
+    *   **A**: PC별 버전 관리 설정을 확인하십시오:
+        - 각 PC에서 30일 보관 설정이 적용되었는지
+        - 서버의 분기별 백업 스크립트가 정상 작동하는지 (`crontab -l`)
+
+### 7.3. 성능 관련 문제
+
+*   **Q**: 웹 대시보드 로딩이 느립니다.
+    *   **A**: 다음 사항들을 확인하십시오:
+        - 분석할 데이터 범위를 줄여보십시오 (특정 기간 또는 프로세스만 선택)
+        - 서버 리소스 사용량 확인 (`htop`, `df -h`)
+        - 백업 폴더의 파일 수가 과도하게 많지 않은지 확인
+
+### 7.4. 서비스 관리
+
+*   **Q**: 서비스가 자동으로 재시작되지 않습니다.
+    *   **A**: systemd 서비스 설정을 확인하십시오:
+        ```bash
+        sudo systemctl enable worker-analysis
+        sudo systemctl daemon-reload
+        ```
+
+*   **Q**: 데이터 분석 결과가 이상합니다.
+    *   **A**: 다음을 확인하십시오:
+        - CSV 파일의 인코딩이 올바른지 (UTF-8, CP949 지원)
+        - 파일 내용이 손상되지 않았는지
+        - 분석 로직이 새로운 데이터 구조에 맞게 업데이트되었는지
+
+## 8. 업데이트 히스토리 (Update History)
+
+### v3.1.0 (2025-09-25)
+- ✅ Syncthing 백업 구조 지원 추가
+- ✅ 날짜별 아카이브 폴더 자동 인식 (2025-XX-XX)
+- ✅ 분기별 백업 시스템 구축
+- ✅ 실시간 데이터 로딩 개선 (아카이브 포함)
+- ✅ 177개 로그 파일 완전 인식 (기존 대비 69개 추가)
+- ✅ 기존 log 폴더 구조와의 호환성 유지
