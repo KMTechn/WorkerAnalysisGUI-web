@@ -7,12 +7,53 @@ import numpy as np
 from datetime import datetime
 import re
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 from flask_socketio import SocketIO
+import gzip
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from analyzer import DataAnalyzer, WorkerPerformance
+from analyzer_optimized import OptimizedDataAnalyzer, WorkerPerformance
+
+def convert_to_json_serializable(obj):
+    """NumPy/Pandas 타입을 JSON 직렬화 가능한 타입으로 변환"""
+    import datetime as dt
+
+    if isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        if np.isinf(obj) or np.isnan(obj):
+            return None
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, (datetime, pd.Timestamp)):
+        return obj.isoformat()
+    elif isinstance(obj, dt.date):
+        return obj.isoformat()
+    elif isinstance(obj, dt.time):
+        return obj.isoformat()
+    elif obj is None:
+        return None
+    # pandas NA 값 처리 (스칼라 값만)
+    elif hasattr(obj, '__len__') and len(obj) == 1:
+        try:
+            if pd.isna(obj):
+                return None
+        except (TypeError, ValueError):
+            pass
+    # 스칼라 pandas NA 값 처리
+    elif not hasattr(obj, '__len__'):
+        try:
+            if pd.isna(obj):
+                return None
+        except (TypeError, ValueError):
+            pass
+    elif isinstance(obj, dict):
+        return {k: convert_to_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_to_json_serializable(item) for item in obj]
+    return obj
 
 def load_settings():
     try:
@@ -36,7 +77,7 @@ socketio = SocketIO(app, async_mode='eventlet')
 # ####################################################################
 # # 데이터 분석기 및 전역 변수
 # ####################################################################
-analyzer = DataAnalyzer()
+analyzer = OptimizedDataAnalyzer()
 RADAR_METRICS_CONFIG = {
     "포장실": { '세트완료시간': ('avg_work_time', False, 1.0), '첫스캔준비성': ('avg_latency', False, 1.0), '무결점달성률': ('first_pass_yield', True, 0.7), '세트당PCS': ('avg_pcs_per_tray', True, 1.0) },
     "이적실": { '신속성': ('avg_work_time', False, 1.0), '준속성': ('avg_latency', False, 1.0), '초도수율': ('first_pass_yield', True, 0.7), '안정성': ('work_time_std', False, 1.0) },
@@ -89,7 +130,14 @@ def get_analysis_data():
         print(f"[API] 공정 모드: {process_mode}")
         
         print("[API] 데이터 로딩 시작...")
-        full_df = analyzer.load_all_data(LOG_FOLDER_PATH, process_mode)
+
+        # 날짜 범위 가져오기
+        start_date = filters.get('start_date')
+        end_date = filters.get('end_date')
+
+        # 최적화된 데이터 로딩 (날짜 범위 기반)
+        full_df = analyzer.load_all_data(LOG_FOLDER_PATH, process_mode,
+                                       start_date=start_date, end_date=end_date)
         print(f"[API] 데이터 로딩 완료. {len(full_df)}개의 세션 데이터 발견.")
 
         if full_df.empty:
@@ -119,9 +167,17 @@ def get_analysis_data():
             for key, value in item.items():
                 if isinstance(value, (datetime, pd.Timestamp)):
                     item[key] = value.isoformat()
+                # NumPy/Pandas 숫자 타입을 Python 기본 타입으로 변환
+                elif isinstance(value, (np.integer, np.int32, np.int64)):
+                    item[key] = int(value)
+                elif isinstance(value, (np.floating, np.float32, np.float64)):
+                    if np.isinf(value) or np.isnan(value):
+                        item[key] = None
+                    else:
+                        item[key] = float(value)
                 # 값이 숫자인 경우에만 isinf를 확인
-                elif isinstance(value, (int, float)) and np.isinf(value):
-                    item[key] = None # Infinity를 None (JSON null)으로 변환
+                elif isinstance(value, (int, float)) and (np.isinf(value) or np.isnan(value)):
+                    item[key] = None # Infinity/NaN을 None (JSON null)으로 변환
 
         normalized_df_json = json.loads(normalized_df.replace([np.inf, -np.inf], None).to_json(orient='records', date_format='iso')) if normalized_df is not None else []
         
@@ -190,16 +246,65 @@ def get_analysis_data():
             comparison_data = {'summary_today': summary_today, 'summary_period': summary_period, 'trends': trends_data}
 
         print("[API] JSON 직렬화 완료. 응답 전송 중...")
-        return jsonify({
-            'kpis': kpis,
-            'worker_data': worker_data_json,
-            'normalized_performance': normalized_df_json,
+
+        # 안전한 JSON 직렬화를 위한 데이터 변환
+        safe_kpis = convert_to_json_serializable(kpis)
+        safe_worker_data = convert_to_json_serializable(worker_data_json)
+        safe_normalized_df = convert_to_json_serializable(normalized_df_json)
+        safe_comparison_data = convert_to_json_serializable(comparison_data)
+
+        # DataFrame을 안전하게 JSON으로 변환
+        try:
+            if not filtered_df.empty:
+                # NaN/Inf 값을 None으로 변환
+                filtered_df_clean = filtered_df.replace([np.inf, -np.inf], None).fillna(None)
+                safe_sessions_data = json.loads(filtered_df_clean.to_json(orient='records', date_format='iso'))
+            else:
+                safe_sessions_data = []
+        except Exception as e:
+            print(f"[API] 세션 데이터 JSON 변환 오류: {e}")
+            safe_sessions_data = []
+
+        try:
+            if not filtered_raw_events_df.empty:
+                filtered_raw_events_clean = filtered_raw_events_df.replace([np.inf, -np.inf], None).fillna(None)
+                safe_raw_events = json.loads(filtered_raw_events_clean.to_json(orient='records', date_format='iso'))
+            else:
+                safe_raw_events = []
+        except Exception as e:
+            print(f"[API] 이벤트 데이터 JSON 변환 오류: {e}")
+            safe_raw_events = []
+
+        response_data = {
+            'kpis': safe_kpis,
+            'worker_data': safe_worker_data,
+            'normalized_performance': safe_normalized_df,
             'workers': all_workers,
             'date_range': date_range,
-            'filtered_sessions_data': json.loads(filtered_df.to_json(orient='records', date_format='iso')),
-            'filtered_raw_events': json.loads(filtered_raw_events_df.to_json(orient='records', date_format='iso')),
-            'comparison_data': comparison_data
-        })
+            'filtered_sessions_data': safe_sessions_data,
+            'filtered_raw_events': safe_raw_events,
+            'comparison_data': safe_comparison_data
+        }
+
+        # 응답 압축 (커스텀 직렬화 사용)
+        class CustomJSONEncoder(json.JSONEncoder):
+            def default(self, obj):
+                return convert_to_json_serializable(obj)
+
+        json_str = json.dumps(response_data, ensure_ascii=False, cls=CustomJSONEncoder)
+        print(f"[API] 압축 전 크기: {len(json_str.encode('utf-8')) / 1024 / 1024:.2f}MB")
+
+        compressed = gzip.compress(json_str.encode('utf-8'))
+        print(f"[API] 압축 후 크기: {len(compressed) / 1024 / 1024:.2f}MB")
+
+        return Response(
+            compressed,
+            mimetype='application/json',
+            headers={
+                'Content-Encoding': 'gzip',
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+        )
 
     except Exception as e:
         import traceback
@@ -466,9 +571,28 @@ def handle_disconnect():
 # ####################################################################
 # # 애플리케이션 실행
 # ####################################################################
+def start_cache_cleanup():
+    """캐시 정리 스케줄러"""
+    while True:
+        time.sleep(3600)  # 1시간마다 실행
+        try:
+            analyzer.cleanup_cache()
+        except Exception as e:
+            print(f"캐시 정리 중 오류: {e}")
+
 if __name__ == '__main__':
+    # 파일 감시 스레드 시작
     monitor_thread = threading.Thread(target=start_file_monitor, daemon=True)
     monitor_thread.start()
-    
-    print("Flask 서버를 시작합니다. http://127.0.0.1:8088 에서 접속하세요.")
+
+    # 캐시 정리 스레드 시작
+    cache_cleanup_thread = threading.Thread(target=start_cache_cleanup, daemon=True)
+    cache_cleanup_thread.start()
+
+    print("최적화된 Flask 서버를 시작합니다. http://127.0.0.1:8089 에서 접속하세요.")
+    print("적용된 최적화:")
+    print("- 파일 레벨 캐싱")
+    print("- 날짜 범위 필터링")
+    print("- 응답 압축 (GZIP)")
+    print("- 메모리 최적화")
     socketio.run(app, host='0.0.0.0', port=8089, debug=True, use_reloader=False)
