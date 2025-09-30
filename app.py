@@ -119,7 +119,9 @@ def start_file_monitor():
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    import time
+    cache_buster = str(int(time.time()))
+    return render_template('index.html', cache_buster=cache_buster)
 
 @app.route('/api/data', methods=['POST'])
 def get_analysis_data():
@@ -135,10 +137,25 @@ def get_analysis_data():
         start_date = filters.get('start_date')
         end_date = filters.get('end_date')
 
-        # 최적화된 데이터 로딩 (날짜 범위 기반)
+        # 평균 계산을 위해 더 넓은 범위의 데이터 로딩
+        # 선택된 기간과 관계없이 최근 60일 데이터를 로딩 (30일 평균 계산용)
+        extended_start_date = None
+        if start_date and end_date:
+            # 선택 기간의 시작일로부터 60일 전까지 로딩
+            try:
+                from datetime import datetime as dt, timedelta
+                selected_start = dt.strptime(start_date, '%Y-%m-%d')
+                extended_start = selected_start - timedelta(days=60)
+                extended_start_date = extended_start.strftime('%Y-%m-%d')
+                print(f"[API] 30일 평균 계산을 위해 확장된 시작 날짜: {extended_start_date}")
+            except:
+                print("[API] 날짜 파싱 오류, 전체 데이터 로딩")
+                extended_start_date = None
+
+        # 확장된 범위로 데이터 로딩
         full_df = analyzer.load_all_data(LOG_FOLDER_PATH, process_mode,
-                                       start_date=start_date, end_date=end_date)
-        print(f"[API] 데이터 로딩 완료. {len(full_df)}개의 세션 데이터 발견.")
+                                       start_date=extended_start_date, end_date=end_date)
+        print(f"[API] 확장된 범위 데이터 로딩 완료. {len(full_df)}개의 세션 데이터 발견.")
 
         if full_df.empty:
             print("[API] 로드된 데이터가 없어 빈 응답을 반환합니다.")
@@ -152,8 +169,10 @@ def get_analysis_data():
         selected_workers = filters.get('selected_workers') or all_workers
 
         print("[API] 데이터 필터링 시작...")
+        print(f"[API] 필터링 조건: start_date={start_date}, end_date={end_date}, workers={selected_workers}")
         filtered_df = analyzer.filter_data(full_df.copy(), start_date, end_date, selected_workers)
         print(f"[API] 데이터 필터링 완료. {len(filtered_df)}개의 세션이 필터링됨.")
+        print(f"[API] 원본 데이터: {len(full_df)}개, 필터링 후: {len(filtered_df)}개")
         
         radar_metrics = RADAR_METRICS_CONFIG.get(process_mode, RADAR_METRICS_CONFIG['이적실'])
         print("[API] 데이터 분석 시작...")
@@ -254,20 +273,30 @@ def get_analysis_data():
         safe_comparison_data = convert_to_json_serializable(comparison_data)
 
         # DataFrame을 안전하게 JSON으로 변환
-        try:
-            if not filtered_df.empty:
-                # NaN/Inf 값을 None으로 변환
-                filtered_df_clean = filtered_df.replace([np.inf, -np.inf], None).fillna(None)
-                safe_sessions_data = json.loads(filtered_df_clean.to_json(orient='records', date_format='iso'))
-            else:
+        print(f"[API] JSON 변환 시작: filtered_df.empty={filtered_df.empty}, len={len(filtered_df)}")
+        print(f"[API] filtered_df columns: {list(filtered_df.columns) if not filtered_df.empty else 'N/A'}")
+
+        # 평균 계산을 위해 전체 데이터를 전달 (필터링된 데이터 대신)
+        if not full_df.empty:
+            try:
+                # 안전한 변환 (pandas 호환) - 전체 데이터 사용
+                full_df_clean = full_df.replace([np.inf, -np.inf], np.nan)
+                full_df_clean = full_df_clean.where(pd.notnull(full_df_clean), None)
+                safe_sessions_data = json.loads(full_df_clean.to_json(orient='records', date_format='iso'))
+                print(f"[API] 전체 세션 데이터 JSON 변환 성공: {len(safe_sessions_data)}개 레코드 (30일 평균 계산용)")
+            except Exception as e:
+                print(f"[API] 세션 데이터 JSON 변환 오류: {e}")
+                import traceback
+                traceback.print_exc()
                 safe_sessions_data = []
-        except Exception as e:
-            print(f"[API] 세션 데이터 JSON 변환 오류: {e}")
+        else:
             safe_sessions_data = []
+            print("[API] full_df가 비어있어 빈 세션 데이터 반환")
 
         try:
             if not filtered_raw_events_df.empty:
-                filtered_raw_events_clean = filtered_raw_events_df.replace([np.inf, -np.inf], None).fillna(None)
+                filtered_raw_events_clean = filtered_raw_events_df.replace([np.inf, -np.inf], np.nan)
+                filtered_raw_events_clean = filtered_raw_events_clean.where(pd.notnull(filtered_raw_events_clean), None)
                 safe_raw_events = json.loads(filtered_raw_events_clean.to_json(orient='records', date_format='iso'))
             else:
                 safe_raw_events = []
@@ -286,25 +315,9 @@ def get_analysis_data():
             'comparison_data': safe_comparison_data
         }
 
-        # 응답 압축 (커스텀 직렬화 사용)
-        class CustomJSONEncoder(json.JSONEncoder):
-            def default(self, obj):
-                return convert_to_json_serializable(obj)
-
-        json_str = json.dumps(response_data, ensure_ascii=False, cls=CustomJSONEncoder)
-        print(f"[API] 압축 전 크기: {len(json_str.encode('utf-8')) / 1024 / 1024:.2f}MB")
-
-        compressed = gzip.compress(json_str.encode('utf-8'))
-        print(f"[API] 압축 후 크기: {len(compressed) / 1024 / 1024:.2f}MB")
-
-        return Response(
-            compressed,
-            mimetype='application/json',
-            headers={
-                'Content-Encoding': 'gzip',
-                'Content-Type': 'application/json; charset=utf-8'
-            }
-        )
+        # 일시적으로 압축 비활성화 (브라우저 호환성 테스트)
+        print("[API] 압축 없이 JSON 응답 전송")
+        return jsonify(response_data)
 
     except Exception as e:
         import traceback
@@ -530,27 +543,52 @@ def get_realtime_data():
         # 2. 최근 30일 데이터 로드 및 시간대별 평균 계산
         all_sessions_df = analyzer.load_all_data(LOG_FOLDER_PATH, process_mode)
         average_hourly_production = []
-        
+        monthly_averages = {
+            'daily_total_pcs': 0,
+            'daily_total_pallets': 0,
+            'daily_worker_count': 0,
+            'daily_avg_work_time': 0
+        }
+
         if not all_sessions_df.empty:
             all_sessions_df['date_only'] = pd.to_datetime(all_sessions_df['date']).dt.date
             thirty_days_ago = datetime.now().date() - pd.to_timedelta('30D')
             recent_sessions_df = all_sessions_df[all_sessions_df['date_only'] >= thirty_days_ago]
-            
+
             if not recent_sessions_df.empty:
                 num_days = recent_sessions_df['date_only'].nunique()
                 if num_days > 0:
+                    # 시간대별 평균 계산 (기존 로직)
+                    recent_sessions_df = recent_sessions_df.copy()
                     recent_sessions_df['hour'] = pd.to_datetime(recent_sessions_df['start_time_dt']).dt.hour
                     total_hourly_summary = recent_sessions_df.groupby('hour')['pcs_completed'].sum().reindex(work_hours, fill_value=0)
                     average_hourly_production = (total_hourly_summary / num_days).values.tolist()
 
+                    # 월간 평균 계산 (새로운 로직)
+                    daily_stats = recent_sessions_df.groupby('date_only').agg({
+                        'pcs_completed': 'sum',
+                        'worker': 'nunique',
+                        'work_time': 'mean',
+                        'date_only': 'size'  # 파렛트 수 (세션 수)
+                    }).rename(columns={'date_only': 'pallet_count'})
+
+                    if not daily_stats.empty:
+                        monthly_averages = {
+                            'daily_total_pcs': round(daily_stats['pcs_completed'].mean(), 1),
+                            'daily_total_pallets': round(daily_stats['pallet_count'].mean(), 1),
+                            'daily_worker_count': round(daily_stats['worker'].mean(), 1),
+                            'daily_avg_work_time': round(daily_stats['work_time'].mean(), 1)
+                        }
+
         return jsonify({
             'worker_status': json.loads(worker_summary.to_json(orient='records')),
             'item_status': json.loads(item_summary.to_json(orient='records')),
-            'hourly_production': { 
-                'labels': [f"{h:02d}시" for h in work_hours], 
+            'hourly_production': {
+                'labels': [f"{h:02d}시" for h in work_hours],
                 'today': hourly_summary.values.tolist() if not hourly_summary.empty else [0]*len(work_hours),
                 'average': average_hourly_production
-            }
+            },
+            'monthly_averages': monthly_averages
         })
     except Exception as e:
         import traceback

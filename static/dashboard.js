@@ -2,10 +2,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
     // ### 글로벌 상태 및 상수 ###
     // ########################
+    // 오늘 날짜를 기본값으로 설정
+    const today = new Date().toISOString().split('T')[0];
     const state = {
         process_mode: '이적실',
-        start_date: '',
-        end_date: '',
+        start_date: today,
+        end_date: today,
         selected_workers: [],
         active_tab: '',
         full_data: null,
@@ -97,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const RADAR_METRICS_CONFIG = {
         "포장실": { '세트완료시간': 'avg_work_time', '첫스캔준비성': 'avg_latency', '무결점달성률': 'first_pass_yield', '세트당PCS': 'avg_pcs_per_tray' },
-        "이적실": { '신속성': 'avg_work_time', '준비성': 'avg_latency', '초도수율': 'first_pass_yield', '안정성': 'work_time_std' },
+        "이적실": { '신속성': 'avg_work_time', '준속성': 'avg_latency', '초도수율': 'first_pass_yield', '안정성': 'work_time_std' },
         "검사실": { '신속성': 'avg_work_time', '준속성': 'avg_latency', '무결점달성률': 'first_pass_yield', '안정성': 'work_time_std', '품질 정확도': 'defect_rate' }
     };
     RADAR_METRICS_CONFIG['전체 비교'] = RADAR_METRICS_CONFIG['이적실'];
@@ -544,7 +546,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div id="realtime-worker-status" class="card"></div>
                 <div id="realtime-item-status" class="card"></div>
             </div>
+            <div id="monthly-averages-section" class="kpi-grid" style="margin-top: 20px;">
+                <div id="monthly-averages-card" class="card"></div>
+            </div>
             <div class="card">
+                <h4 id="chart-title" style="margin-bottom: 1rem; text-align: center;">📈 시간별 생산량 추이 및 효율성 비교</h4>
                 <div class="chart-container" id="realtime-hourly-chart-container">
                     <canvas id="realtime-hourly-chart"></canvas>
                 </div>
@@ -580,13 +586,110 @@ document.addEventListener('DOMContentLoaded', () => {
             itemStatusEl.innerHTML += '<p>데이터 없음</p>';
         }
 
+        // 월간 평균 현황 카드 추가
+        const monthlyAveragesEl = content.querySelector('#monthly-averages-card');
+        monthlyAveragesEl.innerHTML = '<h3>📊 최근 30일 평균 및 오늘 효율성</h3>';
+        if(realtimeData.monthly_averages) {
+            const monthlyData = realtimeData.monthly_averages;
+
+            // 오늘 총 생산량 계산
+            const todayTotal = realtimeData.hourly_production.today.reduce((sum, val) => sum + val, 0);
+            const avgTotal = realtimeData.hourly_production.average.reduce((sum, val) => sum + val, 0);
+
+            // 효율성 계산
+            const todayEfficiency = avgTotal > 0 ? ((todayTotal / avgTotal) * 100) : 0;
+            const efficiencyStatus = todayEfficiency > 110 ? '🟢 우수' :
+                                   todayEfficiency > 90 ? '🔵 보통' : '🔴 개선필요';
+
+            const monthlyKpis = [
+                ['일평균 생산량 (PCS)', `${monthlyData.daily_total_pcs || 0}`],
+                ['일평균 파렛트 수', `${monthlyData.daily_total_pallets || 0}`],
+                ['일평균 작업자 수', `${monthlyData.daily_worker_count || 0}`],
+                ['평균 작업시간 (초)', `${monthlyData.daily_avg_work_time || 0}`],
+                ['━━━━━━━━━━━━━', '━━━━━━━━━━━━━'],
+                ['🎯 오늘 총 생산량', `${todayTotal.toLocaleString()} PCS`],
+                ['📈 오늘 효율성', `${todayEfficiency.toFixed(1)}% ${efficiencyStatus}`]
+            ];
+
+            const monthlyTable = createTable(
+                ['구분', '값'],
+                monthlyKpis
+            );
+            monthlyAveragesEl.appendChild(monthlyTable);
+        } else {
+            monthlyAveragesEl.innerHTML += '<p>월간 평균 데이터 없음</p>';
+        }
+
         // 기간에 맞는 차트 데이터 및 레이블 생성
         const chartData = generatePeriodAwareChartData(realtimeData, dateRange, isRealTime, periodLabel);
+
+        // 차트 제목 업데이트
+        if (isRealTime && realtimeData.hourly_production.average) {
+            const todayTotal = realtimeData.hourly_production.today.reduce((sum, val) => sum + val, 0);
+            const avgTotal = realtimeData.hourly_production.average.reduce((sum, val) => sum + val, 0);
+            const efficiency = avgTotal > 0 ? ((todayTotal / avgTotal) * 100) : 0;
+            const status = efficiency > 110 ? '🟢 우수' : efficiency > 90 ? '🔵 보통' : '🔴 개선필요';
+
+            const chartTitle = content.querySelector('#chart-title');
+            if (chartTitle) {
+                chartTitle.innerHTML = `📈 시간별 생산량 추이 (오늘 효율성: ${efficiency.toFixed(1)}% ${status})`;
+            }
+        }
 
         createChart('realtime-hourly-chart', 'bar', {
             labels: chartData.labels,
             datasets: chartData.datasets
-        }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { text: '완료 PCS 수', display: true } } } });
+        }, {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        afterLabel: function(context) {
+                            if (context.datasetIndex === 1 && realtimeData.hourly_production.average) {
+                                const todayValue = context.raw;
+                                const avgValue = realtimeData.hourly_production.average[context.dataIndex] || 0;
+                                if (avgValue > 0) {
+                                    const efficiency = ((todayValue / avgValue) * 100).toFixed(1);
+                                    const status = todayValue > avgValue * 1.1 ? '🟢 우수' :
+                                                 todayValue > avgValue * 0.9 ? '🔵 보통' : '🔴 개선필요';
+                                    return `평균 대비: ${efficiency}% (${status})`;
+                                }
+                            }
+                            return '';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: '완료 PCS 수',
+                        font: { size: 12, weight: 'bold' }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.1)'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                        text: '⏰ 작업시간 (6시-21시)',
+                        font: { size: 12, weight: 'bold' }
+                    }
+                }
+            }
+        });
     }
 
     function renderProductionTab(pane, data) {
@@ -663,26 +766,128 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         if (isRealTime || isDateRangeSingleDay(dateRange)) {
-            // 실시간/일간: 시간별 생산량
-            const productionByHour = sessions.reduce((acc, session) => {
-                const hour = new Date(session.date).getHours();
-                acc[hour] = (acc[hour] || 0) + (session.pcs_completed || 0);
+            // 실시간/일간: 시간별 생산량 (6시-21시) - 오늘 날짜만 필터링
+            const today = new Date().toISOString().split('T')[0]; // 오늘 날짜 (YYYY-MM-DD)
+            console.log('📅 [DEBUG] 오늘 필터링 기준 날짜:', today);
+
+            const todaySessions = sessions.filter(session => {
+                const sessionDate = session.date.split('T')[0];
+                return sessionDate === today;
+            });
+
+            console.log('📊 [DEBUG] 전체 세션:', sessions.length, ', 오늘 세션:', todaySessions.length);
+
+            const productionByHour = todaySessions.reduce((acc, session) => {
+                const hour = new Date(session.start_time_dt || session.date).getHours();
+                // 6시-21시 범위만 집계
+                if (hour >= 6 && hour <= 21) {
+                    acc[hour] = (acc[hour] || 0) + (session.pcs_completed || 0);
+                }
                 return acc;
             }, {});
 
-            const hourLabels = Array.from({length: 24}, (_, i) => `${i}:00`);
-            const hourData = hourLabels.map((_, hour) => productionByHour[hour] || 0);
+            // 6시-21시 라벨 생성
+            const hourLabels = Array.from({length: 16}, (_, i) => `${i + 6}:00`);
+            const hourData = hourLabels.map((_, index) => productionByHour[index + 6] || 0);
+
+            // 시간별 평균값 계산 (전체 세션 데이터 기준)
+            console.log('[DEBUG] 시간별 평균 계산 시작');
+            console.log('[DEBUG] data.historical_hourly_average:', data.historical_hourly_average);
+
+            const avgData = new Array(16).fill(0);
+
+            if (data.historical_hourly_average && data.historical_hourly_average.some(v => v > 0)) {
+                // 서버에서 제공한 시간별 평균이 있는 경우
+                data.historical_hourly_average.forEach((avg, index) => {
+                    if (index >= 6 && index <= 21) {
+                        avgData[index - 6] = avg;
+                    }
+                });
+                console.log('[DEBUG] 서버 제공 시간별 평균 사용:', avgData.slice(0, 5));
+            } else {
+                // 서버 평균이 없으면 최근 30일 데이터에서 시간별 평균 직접 계산
+                console.log('🔍 [DEBUG] 최근 30일 데이터에서 시간별 평균 직접 계산');
+
+                // 30일 전 날짜 계산
+                const today = new Date();
+                const thirtyDaysAgo = new Date();
+                thirtyDaysAgo.setDate(today.getDate() - 30);
+                const cutoffDate = thirtyDaysAgo.toISOString().split('T')[0];
+
+                console.log('📅 [DEBUG] 30일 기준 날짜:', cutoffDate, '이후 데이터 사용');
+                console.log('📊 [DEBUG] 오늘 날짜:', today.toISOString().split('T')[0]);
+
+                const recentHourlyProduction = {};
+
+                // 최근 30일 세션만 필터링
+                const recentSessions = sessions.filter(session => {
+                    const sessionDate = session.date.split('T')[0];
+                    return sessionDate >= cutoffDate;
+                });
+
+                console.log('📈 [DEBUG] 전체 세션:', sessions.length, ', 최근 30일 세션:', recentSessions.length);
+
+                recentSessions.forEach(session => {
+                    const hour = new Date(session.start_time_dt || session.date).getHours();
+                    const date = session.date.split('T')[0];
+
+                    if (hour >= 6 && hour <= 21) {
+                        const key = `${date}-${hour}`;
+                        if (!recentHourlyProduction[key]) {
+                            recentHourlyProduction[key] = 0;
+                        }
+                        recentHourlyProduction[key] += (session.pcs_completed || 0);
+                    }
+                });
+
+                // 최근 30일 기준 시간별 일평균 계산
+                for (let hour = 6; hour <= 21; hour++) {
+                    const hourlyValues = Object.keys(recentHourlyProduction)
+                        .filter(key => key.includes(`-${hour}`))
+                        .map(key => recentHourlyProduction[key])
+                        .filter(val => val > 0);
+
+                    if (hourlyValues.length > 0) {
+                        avgData[hour - 6] = hourlyValues.reduce((sum, val) => sum + val, 0) / hourlyValues.length;
+                    }
+                }
+
+                console.log('⚡ [DEBUG] 계산된 30일 기준 시간별 평균 샘플:', avgData.slice(0, 8));
+                console.log('🎯 [DEBUG] 오늘 시간별 생산량 샘플:', hourData.slice(0, 8));
+                console.log('🔍 [DEBUG] 두 데이터가 같은가?', JSON.stringify(avgData.slice(0,8)) === JSON.stringify(hourData.slice(0,8)));
+            }
+
+            const datasets = [{
+                label: '오늘 시간별 생산량 (PCS)',
+                data: hourData,
+                borderColor: 'var(--color-primary)',
+                backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                fill: true,
+                tension: 0.3
+            }];
+
+            // 평균 데이터가 유효한 경우에만 추가
+            const totalAvg = avgData.reduce((sum, val) => sum + val, 0);
+            console.log('[DEBUG] 시간별 평균 총합:', totalAvg);
+
+            if (totalAvg > 0) {
+                datasets.push({
+                    label: '시간별 평균 생산량 (30일 기준)',
+                    data: avgData,
+                    borderColor: 'red',
+                    backgroundColor: 'rgba(255, 0, 0, 0.1)',
+                    borderDash: [5, 5],
+                    fill: false,
+                    tension: 0.3
+                });
+                console.log('[DEBUG] 30일 기준 평균선을 차트에 추가함');
+            } else {
+                console.log('[DEBUG] 30일 기준 평균이 모두 0이므로 평균선을 추가하지 않음');
+            }
 
             chartData = {
                 labels: hourLabels,
-                datasets: [{
-                    label: '시간별 생산량 (PCS)',
-                    data: hourData,
-                    borderColor: 'var(--color-primary)',
-                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                    fill: true,
-                    tension: 0.3
-                }]
+                datasets: datasets
             };
         } else if (isDateRangeWeekly(dateRange)) {
             // 주간: 일별 생산량
@@ -694,17 +899,81 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const sortedDates = Object.keys(productionByDate).sort();
             const labels = sortedDates.map(date => new Date(date).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' }));
-            const data = sortedDates.map(date => productionByDate[date] || 0);
+            const dailyData = sortedDates.map(date => productionByDate[date] || 0);
+
+            // 평균 계산: 단일 날짜인 경우 전체 세션 데이터에서 히스토리 평균 사용
+            let averageDaily = 0;
+            console.log('[DEBUG] 평균 계산 시작 - sortedDates.length:', sortedDates.length);
+            console.log('[DEBUG] sessions.length:', sessions.length);
+
+            if (sortedDates.length === 1) {
+                console.log('[DEBUG] 단일 날짜 선택됨 - 최근 30일에서 평균 계산');
+
+                // 단일 날짜 선택 시: 최근 30일 데이터에서 일별 평균 계산
+                const today = new Date();
+                const thirtyDaysAgo = new Date();
+                thirtyDaysAgo.setDate(today.getDate() - 30);
+                const cutoffDate = thirtyDaysAgo.toISOString().split('T')[0];
+
+                console.log('[DEBUG] 일별 평균 - 30일 기준 날짜:', cutoffDate);
+
+                const recentSessions = sessions.filter(session => {
+                    const sessionDate = session.date.split('T')[0];
+                    return sessionDate >= cutoffDate;
+                });
+
+                const recentProductionByDate = recentSessions.reduce((acc, session) => {
+                    const date = session.date.split('T')[0];
+                    acc[date] = (acc[date] || 0) + (session.pcs_completed || 0);
+                    return acc;
+                }, {});
+
+                console.log('[DEBUG] 일별 평균 - 전체 세션:', sessions.length, ', 최근 30일 세션:', recentSessions.length);
+
+                const recentDailyValues = Object.values(recentProductionByDate).filter(val => val > 0);
+                console.log('[DEBUG] 30일 기준 0이 아닌 일별 값들:', recentDailyValues.length, '개');
+
+                averageDaily = recentDailyValues.length > 0 ?
+                    recentDailyValues.reduce((sum, val) => sum + val, 0) / recentDailyValues.length : 0;
+
+                console.log('[DEBUG] 계산된 히스토리 평균:', averageDaily);
+            } else {
+                console.log('[DEBUG] 다중 날짜 선택됨 - 선택된 기간의 평균 계산');
+
+                // 다중 날짜 선택 시: 선택된 기간의 평균 사용
+                const nonZeroData = dailyData.filter(val => val > 0);
+                averageDaily = nonZeroData.length > 0 ?
+                    nonZeroData.reduce((sum, val) => sum + val, 0) / nonZeroData.length :
+                    dailyData.reduce((sum, val) => sum + val, 0) / dailyData.length;
+
+                console.log('[DEBUG] 선택 기간 평균:', averageDaily);
+            }
+            const avgData = new Array(dailyData.length).fill(averageDaily);
+
+            const datasets = [{
+                label: '일별 생산량 (PCS)',
+                data: dailyData,
+                backgroundColor: 'var(--color-primary)',
+                borderColor: 'var(--color-primary)',
+                borderWidth: 1
+            }];
+
+            // 평균이 0보다 클 때만 평균선 추가
+            if (averageDaily > 0) {
+                datasets.push({
+                    label: `일평균 (30일 기준, ${averageDaily.toFixed(0)} PCS)`,
+                    data: avgData,
+                    type: 'line',
+                    borderColor: 'red',
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
+                });
+            }
 
             chartData = {
                 labels: labels,
-                datasets: [{
-                    label: '일별 생산량 (PCS)',
-                    data: data,
-                    backgroundColor: 'var(--color-primary)',
-                    borderColor: 'var(--color-primary)',
-                    borderWidth: 1
-                }]
+                datasets: datasets
             };
 
             // 막대 차트로 변경
@@ -715,7 +984,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const productionByWeek = {};
 
             sessions.forEach(session => {
-                const date = new Date(session.date);
+                const date = new Date(session.start_time_dt || session.date);
                 const weekStart = new Date(date);
                 weekStart.setDate(date.getDate() - date.getDay());
                 const weekKey = weekStart.toISOString().split('T')[0];
@@ -730,17 +999,73 @@ document.addEventListener('DOMContentLoaded', () => {
                 end.setDate(end.getDate() + 6);
                 return `${start.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} ~ ${end.toLocaleDateString('ko-KR', { day: 'numeric' })}`;
             });
-            const data = sortedWeeks.map(week => productionByWeek[week] || 0);
+            const weeklyData = sortedWeeks.map(week => productionByWeek[week] || 0);
+
+            // 평균 계산: 단일 주간인 경우 전체 세션 데이터에서 히스토리 평균 사용
+            let averageWeekly = 0;
+            if (sortedWeeks.length === 1) {
+                // 단일 주간 선택 시: 최근 30일 데이터에서 주별 평균 계산
+                const today = new Date();
+                const thirtyDaysAgo = new Date();
+                thirtyDaysAgo.setDate(today.getDate() - 30);
+                const cutoffDate = thirtyDaysAgo.toISOString().split('T')[0];
+
+                console.log('[DEBUG] 주별 평균 - 30일 기준 날짜:', cutoffDate);
+
+                const recentSessions = sessions.filter(session => {
+                    const sessionDate = session.date.split('T')[0];
+                    return sessionDate >= cutoffDate;
+                });
+
+                const recentProductionByWeek = {};
+                recentSessions.forEach(session => {
+                    const date = new Date(session.start_time_dt || session.date);
+                    const weekStart = new Date(date);
+                    weekStart.setDate(date.getDate() - date.getDay());
+                    const weekKey = weekStart.toISOString().split('T')[0];
+                    recentProductionByWeek[weekKey] = (recentProductionByWeek[weekKey] || 0) + (session.pcs_completed || 0);
+                });
+
+                console.log('[DEBUG] 주별 평균 - 전체 세션:', sessions.length, ', 최근 30일 세션:', recentSessions.length);
+
+                const recentWeeklyValues = Object.values(recentProductionByWeek).filter(val => val > 0);
+                averageWeekly = recentWeeklyValues.length > 0 ?
+                    recentWeeklyValues.reduce((sum, val) => sum + val, 0) / recentWeeklyValues.length : 0;
+
+                console.log('[DEBUG] 30일 기준 주별 평균:', averageWeekly.toFixed(0));
+            } else {
+                // 다중 주간 선택 시: 선택된 기간의 평균 사용
+                const nonZeroWeeklyData = weeklyData.filter(val => val > 0);
+                averageWeekly = nonZeroWeeklyData.length > 0 ?
+                    nonZeroWeeklyData.reduce((sum, val) => sum + val, 0) / nonZeroWeeklyData.length :
+                    weeklyData.reduce((sum, val) => sum + val, 0) / weeklyData.length;
+            }
+            const avgData = new Array(weeklyData.length).fill(averageWeekly);
+
+            const weeklyDatasets = [{
+                label: '주별 생산량 (PCS)',
+                data: weeklyData,
+                backgroundColor: 'var(--color-success)',
+                borderColor: 'var(--color-success)',
+                borderWidth: 1
+            }];
+
+            // 평균이 0보다 클 때만 평균선 추가
+            if (averageWeekly > 0) {
+                weeklyDatasets.push({
+                    label: `주평균 (30일 기준, ${averageWeekly.toFixed(0)} PCS)`,
+                    data: avgData,
+                    type: 'line',
+                    borderColor: 'red',
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
+                });
+            }
 
             chartData = {
                 labels: labels,
-                datasets: [{
-                    label: '주별 생산량 (PCS)',
-                    data: data,
-                    backgroundColor: 'var(--color-success)',
-                    borderColor: 'var(--color-success)',
-                    borderWidth: 1
-                }]
+                datasets: weeklyDatasets
             };
 
             // 막대 차트로 변경
@@ -879,8 +1204,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const radarMetrics = RADAR_METRICS_CONFIG[state.process_mode];
         const labels = Object.keys(radarMetrics);
         const chartData = labels.map(label => {
-            const metricKey = radarMetrics[label];
-            return (workerNorm[`${metricKey}_norm`] || 0) * 100;
+            // 한국어 라벨을 직접 사용 (API에서 한국어 키로 반환)
+            return (workerNorm[label] || 0) * 100;
         });
 
         createChart('worker-radar-chart', 'radar', {
@@ -931,10 +1256,20 @@ document.addEventListener('DOMContentLoaded', () => {
             const filters = JSON.parse(savedFilters);
             state.process_mode = filters.process_mode || '이적실';
             document.querySelector(`input[name="process_mode"][value="${state.process_mode}"]`).checked = true;
-            elements.startDateInput.value = filters.start_date || '';
-            elements.endDateInput.value = filters.end_date || '';
+            elements.startDateInput.value = filters.start_date || today;
+            elements.endDateInput.value = filters.end_date || today;
             // workerList는 데이터 로드 후 채워지므로 여기서는 state만 업데이트
             state.selected_workers = filters.selected_workers || [];
+        }
+
+        // 날짜 필드 초기화 (저장된 값이 없을 경우)
+        if (!elements.startDateInput.value) {
+            elements.startDateInput.value = today;
+            state.start_date = today;
+        }
+        if (!elements.endDateInput.value) {
+            elements.endDateInput.value = today;
+            state.end_date = today;
         }
     }
 
@@ -973,8 +1308,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const radarMetrics = RADAR_METRICS_CONFIG[state.process_mode];
         const labels = Object.keys(radarMetrics);
         const chartData = labels.map(label => {
-            const metricKey = radarMetrics[label];
-            return (workerNorm[`${metricKey}_norm`] || 0) * 100;
+            // 한국어 라벨을 직접 사용 (API에서 한국어 키로 반환)
+            return (workerNorm[label] || 0) * 100;
         });
 
         createChart('worker-radar-chart', 'radar', {
@@ -1588,15 +1923,40 @@ document.addEventListener('DOMContentLoaded', () => {
             ];
 
             if (realtimeData.hourly_production.average && realtimeData.hourly_production.average.length > 0) {
+                // 오늘과 평균 비교해서 색상 동적으로 설정
+                const todayData = realtimeData.hourly_production.today;
+                const avgData = realtimeData.hourly_production.average;
+                const comparisonColors = todayData.map((todayValue, index) => {
+                    const avgValue = avgData[index] || 0;
+                    console.log(`시간 ${index+6}: 오늘=${todayValue}, 평균=${avgValue.toFixed(1)}`);
+                    if (todayValue > avgValue * 1.1) {
+                        console.log(`  🟢 우수 (${((todayValue/avgValue)*100).toFixed(1)}%)`);
+                        return 'rgba(46, 204, 113, 0.8)'; // 10% 이상 좋음 - 초록
+                    }
+                    if (todayValue > avgValue * 0.9) {
+                        console.log(`  🔵 보통 (${((todayValue/avgValue)*100).toFixed(1)}%)`);
+                        return 'rgba(52, 152, 219, 0.8)'; // 평균 수준 - 파랑
+                    }
+                    console.log(`  🔴 개선필요 (${avgValue > 0 ? ((todayValue/avgValue)*100).toFixed(1) : 0}%)`);
+                    return 'rgba(231, 76, 60, 0.8)'; // 평균 이하 - 빨강
+                });
+
+                // 오늘 데이터 색상 업데이트
+                datasets[0].backgroundColor = comparisonColors;
+
                 datasets.unshift({
                     type: 'line',
-                    label: '최근 30일 평균',
+                    label: '📊 30일 평균 (기준선)',
                     data: realtimeData.hourly_production.average,
-                    borderColor: 'rgba(255, 99, 132, 0.8)',
-                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                    borderWidth: 2,
+                    borderColor: 'rgba(155, 89, 182, 1)',
+                    backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                    borderWidth: 3,
                     fill: false,
-                    tension: 0.1
+                    tension: 0.1,
+                    pointBackgroundColor: 'rgba(155, 89, 182, 1)',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 4
                 });
             }
 

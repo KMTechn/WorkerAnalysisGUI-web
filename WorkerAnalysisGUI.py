@@ -1828,15 +1828,15 @@ class WorkerAnalysisGUI:
         card_frame = ttk.Frame(parent, style='Card.TFrame')
         card_frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(card_frame, text=title, style='Header.TLabel', background=self.COLOR_SIDEBAR_BG).pack(anchor='w', pady=(10, 10), padx=10)
-        
+
         fig = Figure(figsize=(8, 4), dpi=100, facecolor=self.COLOR_SIDEBAR_BG)
         ax = fig.add_subplot(111)
-        
+
         if not df_to_use.empty and 'date_dt' in df_to_use.columns and 'pcs_completed' in df_to_use.columns:
             temp_df = df_to_use.copy()
             temp_df.set_index('date_dt', inplace=True)
             grouped_data = temp_df.resample(period_type)['pcs_completed'].sum()
-            
+
             if not grouped_data.empty:
                 x_labels = []
                 if period_type == "W":
@@ -1848,18 +1848,66 @@ class WorkerAnalysisGUI:
                 else:  # "D"
                     x_labels = [f"{d.strftime('%m-%d')}" for d in grouped_data.index]
                     ax.set_xlabel("날짜")
-                    
-                ax.plot(grouped_data.index, grouped_data.values, color=self.COLOR_PRIMARY, marker='o', zorder=3)
+
+                # 실제 생산량 그래프
+                ax.plot(grouped_data.index, grouped_data.values, color=self.COLOR_PRIMARY, marker='o', linewidth=2, label='실제 생산량', zorder=3)
                 ax.fill_between(grouped_data.index, grouped_data.values, color=self.COLOR_PRIMARY, alpha=0.1)
+
+                # 평균치 계산 및 추가
+                if len(grouped_data) >= 1:
+                    # 단일 기간인 경우 전체 데이터에서 평균 계산
+                    if len(grouped_data) == 1:
+                        # df_to_use에 있는 전체 데이터에서 일별/주별/월별 평균 계산
+                        try:
+                            full_temp_df = df_to_use.copy()
+                            full_temp_df.set_index('date_dt', inplace=True)
+                            full_grouped_data = full_temp_df.resample(period_type)['pcs_completed'].sum()
+                            full_non_zero_data = full_grouped_data[full_grouped_data > 0]
+                            if len(full_non_zero_data) > 1:
+                                avg_production = full_non_zero_data.mean()
+                            else:
+                                avg_production = 0  # 히스토리 데이터 부족
+                        except:
+                            avg_production = 0
+                    else:
+                        # 다중 기간인 경우 선택된 기간의 평균 사용
+                        non_zero_data = grouped_data[grouped_data > 0]
+                        if len(non_zero_data) > 0:
+                            avg_production = non_zero_data.mean()
+                        else:
+                            avg_production = grouped_data.mean()
+
+                    # 평균선 그리기 (평균이 0보다 클 때만)
+                    if avg_production > 0:
+                        ax.axhline(y=avg_production, color='red', linestyle='--', linewidth=2, label=f'평균 ({avg_production:.0f} PCS)', alpha=0.8, zorder=2)
+
+                    # 오늘 날짜의 생산량과 평균 비교 (일간 차트일 경우)
+                    if period_type == "D":
+                        today = pd.Timestamp.now().normalize()
+                        if today in grouped_data.index:
+                            today_production = grouped_data[today]
+                            diff_pct = ((today_production - avg_production) / avg_production * 100) if avg_production > 0 else 0
+
+                            # 오늘 데이터 포인트 강조
+                            ax.scatter([today], [today_production], color='orange', s=100, zorder=4, edgecolors='black', linewidth=1)
+
+                            # 차이 표시
+                            status_color = 'green' if diff_pct > 0 else 'red'
+                            status_text = f"오늘: {today_production:.0f} PCS ({diff_pct:+.1f}%)"
+                            ax.text(0.02, 0.98, status_text, transform=ax.transAxes,
+                                   bbox=dict(boxstyle='round,pad=0.3', facecolor=status_color, alpha=0.2),
+                                   verticalalignment='top', fontsize=10, weight='bold')
+
                 ax.set_xticks(grouped_data.index)
                 ax.set_xticklabels(x_labels, rotation=45, ha='right')
+                ax.legend(loc='upper right')
 
         ax.set_ylabel("총 생산량 (PCS)")
         ax.spines[['right', 'top']].set_visible(False)
         ax.grid(True, which='both', linestyle='--', linewidth=0.5, zorder=0)
         ax.set_facecolor(self.COLOR_SIDEBAR_BG)
         fig.tight_layout(pad=2.0)
-        
+
         FigureCanvasTkAgg(fig, master=card_frame).get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
     def _draw_speed_accuracy_scatter(self,parent):
