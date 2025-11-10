@@ -317,9 +317,15 @@ def get_analysis_data():
                 traceback.print_exc()
                 safe_sessions_data = []
 
-        # 2. 30일 평균 계산용 데이터 (최근 30일)
-        safe_historical_data = []
-        if not full_df.empty:
+        # 2. 30일 평균 계산용 데이터 (요약 통계만 전송 - 최적화)
+        safe_historical_summary = {
+            'daily_stats': [],
+            'total_sessions': 0,
+            'num_days': 0,
+            'averages': {'daily_pcs': 0, 'hourly_pcs': [0] * 16},
+            'date_range': {'start': None, 'end': None}
+        }
+        if not full_df.empty and 'date' in full_df.columns:
             try:
                 from datetime import datetime as dt, timedelta
                 thirty_days_ago = dt.now() - timedelta(days=30)
@@ -327,15 +333,43 @@ def get_analysis_data():
                 recent_df = full_df[full_df['date'] >= thirty_days_ago.date()].copy()
 
                 if not recent_df.empty:
-                    recent_df_clean = recent_df.replace([np.inf, -np.inf], np.nan)
-                    recent_df_clean = recent_df_clean.where(pd.notnull(recent_df_clean), None)
-                    safe_historical_data = json.loads(recent_df_clean.to_json(orient='records', date_format='iso'))
-                    print(f"[API] 30일 평균용 데이터 JSON 변환 성공: {len(safe_historical_data)}개 레코드")
+                    # 원본 데이터 대신 일별 요약 통계만 전송 (데이터 크기 대폭 감소)
+                    daily_summary = recent_df.groupby('date').agg({
+                        'pcs_completed': 'sum',
+                        'work_time': 'mean',
+                        'latency': 'mean',
+                        'first_pass_yield': 'mean',
+                        'worker': 'nunique'
+                    }).reset_index()
+
+                    # 시간별 평균 계산 (프론트엔드 계산 부담 감소)
+                    recent_df['hour'] = pd.to_datetime(recent_df['start_time_dt']).dt.hour
+                    hourly_avg = recent_df[recent_df['hour'].between(6, 21)].groupby('hour')['pcs_completed'].sum()
+                    num_days = recent_df['date'].nunique()
+                    hourly_avg = (hourly_avg / num_days).reindex(range(6, 22), fill_value=0)
+
+                    # 일별, 주별 평균 계산
+                    daily_avg_pcs = daily_summary['pcs_completed'].mean()
+
+                    safe_historical_summary = {
+                        'daily_stats': json.loads(daily_summary.to_json(orient='records', date_format='iso')),
+                        'total_sessions': len(recent_df),
+                        'num_days': num_days,
+                        'averages': {
+                            'daily_pcs': round(daily_avg_pcs, 1),
+                            'hourly_pcs': hourly_avg.round(1).tolist()  # 6시~21시 평균
+                        },
+                        'date_range': {
+                            'start': recent_df['date'].min().isoformat(),
+                            'end': recent_df['date'].max().isoformat()
+                        }
+                    }
+                    print(f"[API] 30일 평균용 요약 통계 생성: {len(daily_summary)}일치 데이터 (원본 {len(recent_df)}개 → 요약 {len(daily_summary)}개)")
             except Exception as e:
-                print(f"[API] 30일 데이터 JSON 변환 오류: {e}")
+                print(f"[API] 30일 데이터 요약 오류: {e}")
                 import traceback
                 traceback.print_exc()
-                safe_historical_data = []
+                safe_historical_summary = {}
 
         try:
             if not filtered_raw_events_df.empty:
@@ -355,14 +389,41 @@ def get_analysis_data():
             'workers': all_workers,
             'date_range': date_range,
             'filtered_sessions_data': safe_sessions_data,
-            'historical_sessions_data': safe_historical_data,  # 30일 평균 계산용
+            'historical_summary': safe_historical_summary,  # 30일 평균 계산용 (요약 통계로 최적화)
             'filtered_raw_events': safe_raw_events,
             'comparison_data': safe_comparison_data
         }
 
-        # 일시적으로 압축 비활성화 (브라우저 호환성 테스트)
-        print("[API] 압축 없이 JSON 응답 전송")
-        return jsonify(response_data)
+        # GZIP 압축 활성화하여 응답 크기 최적화
+        print(f"[API] 응답 데이터 전송 (압축 활성화)")
+        response = jsonify(response_data)
+
+        # GZIP 압축 적용
+        import gzip
+        from io import BytesIO
+
+        # JSON을 문자열로 변환
+        json_str = response.get_data(as_text=True)
+
+        # GZIP 압축
+        gzip_buffer = BytesIO()
+        with gzip.GzipFile(mode='wb', fileobj=gzip_buffer, compresslevel=6) as gz_file:
+            gz_file.write(json_str.encode('utf-8'))
+
+        compressed_data = gzip_buffer.getvalue()
+        original_size = len(json_str.encode('utf-8'))
+        compressed_size = len(compressed_data)
+        compression_ratio = (1 - compressed_size / original_size) * 100
+
+        print(f"[API] 압축 완료: {original_size:,} bytes → {compressed_size:,} bytes ({compression_ratio:.1f}% 감소)")
+
+        # 압축된 응답 반환
+        compressed_response = Response(compressed_data)
+        compressed_response.headers['Content-Encoding'] = 'gzip'
+        compressed_response.headers['Content-Type'] = 'application/json'
+        compressed_response.headers['Content-Length'] = str(compressed_size)
+
+        return compressed_response
 
     except Exception as e:
         import traceback

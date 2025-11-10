@@ -170,6 +170,21 @@ class OptimizedDataAnalyzer:
             else:
                 df['process'] = '기타'
 
+            # 작업자 이름 정규화: CSV 내부에 잘못된 값이 있으면 파일명에서 추출
+            if 'worker' in df.columns and not df.empty:
+                # 파일명 패턴: {공정}작업이벤트로그_{작업자}_{날짜}.csv
+                import re
+                match = re.search(r'작업이벤트로그_([^_]+)_\d{8}', filename)
+                if match:
+                    worker_name_from_file = match.group(1)
+                    # CSV 내부의 worker 값이 버전 번호 형식(1.0.5 등)이거나 호스트명이면 파일명의 작업자로 대체
+                    df['worker'] = df['worker'].apply(
+                        lambda w: worker_name_from_file
+                        if (pd.notna(w) and (re.match(r'^\d+\.\d+\.\d+$', str(w)) or str(w).startswith('BOOK-')))
+                        else str(w)
+                    )
+                    logger.info(f"작업자 이름 정규화: {filename} -> {worker_name_from_file}")
+
             # 이벤트 처리하여 세션 생성
             sessions_df = self.process_events_to_sessions(df)
 
@@ -316,21 +331,27 @@ class OptimizedDataAnalyzer:
     def filter_data(self, df: pd.DataFrame, start_date, end_date, selected_workers, shipping_start_date=None, shipping_end_date=None):
         """데이터 필터링 (기존 로직 유지)"""
         if df.empty:
+            logger.info("filter_data: 입력 DataFrame이 비어있음")
             return pd.DataFrame()
 
         df_filtered = df.copy()
+        logger.info(f"filter_data: 필터링 전 행 수 = {len(df_filtered)}")
+
         df_filtered['date'] = pd.to_datetime(df_filtered['date'], errors='coerce').dt.date
         df_filtered.dropna(subset=['date'], inplace=True)
+        logger.info(f"filter_data: 날짜 변환 후 행 수 = {len(df_filtered)}")
 
         try:
             start_date_obj = pd.to_datetime(start_date).date()
             end_date_obj = pd.to_datetime(end_date).date()
+            logger.info(f"filter_data: 날짜 범위 = {start_date_obj} ~ {end_date_obj}")
         except (ValueError, TypeError, AttributeError):
             logger.warning(f"유효하지 않은 날짜 필터 값입니다. Start: {start_date}, End: {end_date}")
             return pd.DataFrame()
 
         mask = (df_filtered['date'] >= start_date_obj) & (df_filtered['date'] <= end_date_obj)
         df_filtered = df_filtered.loc[mask].copy()
+        logger.info(f"filter_data: 날짜 필터링 후 행 수 = {len(df_filtered)}")
 
         if shipping_start_date and shipping_end_date and 'shipping_date' in df_filtered.columns:
             df_filtered.dropna(subset=['shipping_date'], inplace=True)
@@ -345,7 +366,9 @@ class OptimizedDataAnalyzer:
 
         if selected_workers:
             df_filtered = df_filtered[df_filtered['worker'].isin(selected_workers)]
+            logger.info(f"filter_data: 작업자 필터링 후 행 수 = {len(df_filtered)}")
 
+        logger.info(f"filter_data: 최종 반환 행 수 = {len(df_filtered)}")
         return df_filtered
 
     def analyze_dataframe(self, df, radar_metrics, full_sessions_df=None):
