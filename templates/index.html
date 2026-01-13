@@ -14,8 +14,15 @@
 <body>
     <div class="loading-overlay" id="loading-overlay">
         <div class="loading-spinner"></div>
-        <p>데이터 분석 중...</p>
+        <p id="loading-message">데이터 분석 중...</p>
+        <p id="loading-submessage" style="font-size: 0.85rem; color: rgba(255,255,255,0.8); margin-top: 8px;">잠시만 기다려 주세요</p>
     </div>
+
+    <!-- 모바일 햄버거 메뉴 버튼 -->
+    <button class="mobile-menu-btn" id="mobile-menu-btn">☰</button>
+
+    <!-- 사이드바 오버레이 (모바일) -->
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
     <div class="container">
         <!-- Sidebar -->
@@ -42,59 +49,11 @@
                 </div>
 
                 <div class="filter-group">
-                    <label class="filter-label">분석 기간</label>
-                    <div class="date-presets">
-                        <button type="button" class="btn-preset" data-preset="today">오늘</button>
-                        <button type="button" class="btn-preset" data-preset="week">1주일</button>
-                        <button type="button" class="btn-preset" data-preset="month">1개월</button>
-                        <button type="button" class="btn-preset" data-preset="quarter">분기</button>
+                    <label class="filter-label">바코드 검색</label>
+                    <div class="barcode-search">
+                        <input type="text" id="barcode-input" placeholder="바코드 입력" class="barcode-input-field">
+                        <button id="search-barcode-btn" class="btn btn-primary">검색</button>
                     </div>
-                    <div class="date-inputs">
-                        <input type="date" id="start-date-input" placeholder="시작일">
-                        <span>~</span>
-                        <input type="date" id="end-date-input" placeholder="종료일">
-                    </div>
-                </div>
-
-                <div class="filter-group filter-group-expand">
-                    <label for="worker-list" class="filter-label">작업자 선택</label>
-                    <div class="worker-filter-controls">
-                        <button type="button" id="select-all-workers" class="btn-control">전체선택</button>
-                        <button type="button" id="deselect-all-workers" class="btn-control">전체해제</button>
-                        <button type="button" id="select-top-performers" class="btn-control">우수자만</button>
-                    </div>
-                    <div class="listbox-container">
-                        <select id="worker-list" multiple></select>
-                    </div>
-                </div>
-
-                <div class="filter-group">
-                    <label class="filter-label">고급 필터</label>
-                    <div class="advanced-filters">
-                        <div class="filter-option">
-                            <label>
-                                <input type="checkbox" id="filter-high-performance" value="high-performance">
-                                고성과자만 (상위 20%)
-                            </label>
-                        </div>
-                        <div class="filter-option">
-                            <label>
-                                <input type="checkbox" id="filter-recent-errors" value="recent-errors">
-                                최근 오류 발생자
-                            </label>
-                        </div>
-                        <div class="filter-option">
-                            <label>
-                                <input type="checkbox" id="filter-productivity-decline" value="productivity-decline">
-                                생산성 하락 추세
-                            </label>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="filter-buttons">
-                    <button id="run-analysis-btn" class="btn btn-primary">분석 실행</button>
-                    <button id="reset-filters-btn" class="btn">필터 초기화</button>
                 </div>
             </nav>
         </aside>
@@ -103,13 +62,6 @@
         <main class="main-content">
             <header class="main-header">
                 <h1 id="main-title">대시보드</h1>
-                <div class="header-actions">
-                    <div class="font-size-controls">
-                        <button id="decrease-font-size">-</button>
-                        <span>Font Size</span>
-                        <button id="increase-font-size">+</button>
-                    </div>
-                </div>
             </header>
 
             <div class="tabs">
@@ -122,6 +74,50 @@
         </main>
     </div>
 
-    <script src="{{ url_for('static', filename='dashboard.js') }}?v={{ cache_buster }}"></script>
+    <!-- 바코드 검색 모달 -->
+    <div id="barcode-modal" class="barcode-modal" style="display: none;">
+        <div class="barcode-modal-overlay" onclick="closeBarcodeModal()"></div>
+        <div class="barcode-modal-content">
+            <div class="barcode-modal-header">
+                <h2>🔍 바코드 검색 결과</h2>
+                <button class="barcode-modal-close" onclick="closeBarcodeModal()">&times;</button>
+            </div>
+            <div class="barcode-modal-body" id="barcode-modal-body">
+                <!-- 검색 결과가 여기에 표시됩니다 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 작업자 생산량 그래프 모달 -->
+    <div id="worker-chart-modal" class="barcode-modal" style="display: none;">
+        <div class="barcode-modal-overlay" onclick="closeWorkerChartModal()"></div>
+        <div class="barcode-modal-content" style="max-width: 900px; width: 95%;">
+            <div class="barcode-modal-header">
+                <h2 id="worker-chart-title">📊 작업자 시간당 생산량</h2>
+                <button class="barcode-modal-close" onclick="closeWorkerChartModal()">&times;</button>
+            </div>
+            <div class="barcode-modal-body" id="worker-chart-body" style="padding: 20px;">
+                <!-- 작업자 통계 요약 -->
+                <div id="worker-summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 20px;"></div>
+                <!-- 시간대별 생산량 그래프 -->
+                <div style="background: #f9fafb; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #374151;">시간대별 평균 생산량</h4>
+                    <div style="height: 250px;">
+                        <canvas id="worker-hourly-chart"></canvas>
+                    </div>
+                </div>
+                <!-- 일별 생산량 그래프 -->
+                <div style="background: #f9fafb; border-radius: 8px; padding: 15px;">
+                    <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #374151;">일별 생산량</h4>
+                    <div style="height: 200px;">
+                        <canvas id="worker-daily-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='dashboard_enhanced.js') }}?v={{ cache_buster }}"></script>
+    <!-- 향상된 버전: 차트 + 기간 필터 추가 (데이터 포인트 제한으로 안정성 확보) -->
 </body>
 </html>
