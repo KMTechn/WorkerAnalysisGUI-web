@@ -74,8 +74,37 @@ DB_PATH = '/root/WorkerAnalysisGUI-web/data/worker_analysis.db'
 
 # Flask 및 SocketIO 설정
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret-key-for-dev'
+
+# 보안 모듈 적용
+from security import setup_security, InputValidator, rate_limit, validate_date_params
+setup_security(app)
+
 socketio = SocketIO(app, async_mode='eventlet')
+
+# Stock Ledger Blueprint 등록
+from blueprints.stock import stock_bp
+app.register_blueprint(stock_bp, url_prefix='/stock')
+
+# Stock Ledger Socket.IO 네임스페이스
+stock_viewers = set()
+
+@socketio.on('connect', namespace='/stock')
+def stock_connect():
+    """재고 원장 실시간 연결"""
+    stock_viewers.add(request.sid)
+    socketio.emit('viewer_count', len(stock_viewers), namespace='/stock')
+    print(f"[Stock] 클라이언트 연결: {request.sid} (총 {len(stock_viewers)}명)")
+
+@socketio.on('disconnect', namespace='/stock')
+def stock_disconnect():
+    """재고 원장 연결 해제"""
+    stock_viewers.discard(request.sid)
+    socketio.emit('viewer_count', len(stock_viewers), namespace='/stock')
+    print(f"[Stock] 클라이언트 연결 해제: {request.sid} (총 {len(stock_viewers)}명)")
+
+def notify_stock_update(entry_data):
+    """재고 변경 알림 (외부에서 호출 가능)"""
+    socketio.emit('stock_update', entry_data, namespace='/stock')
 
 # Database Manager
 db = DatabaseManager(DB_PATH)

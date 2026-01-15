@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>재고 원장 - KMTech 통합 대시보드</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --success-color: #27ae60;
+            --danger-color: #e74c3c;
+        }
+
+        body {
+            background-color: #f5f6fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .top-nav {
+            background: #1a252f;
+            padding: 0.5rem 0;
+            font-size: 0.85rem;
+        }
+
+        .top-nav a {
+            color: #adb5bd;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            transition: color 0.2s;
+        }
+
+        .top-nav a:hover {
+            color: white;
+        }
+
+        .top-nav a.active {
+            color: #3498db;
+            font-weight: 600;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .filter-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.05);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .filter-card h5 {
+            color: var(--primary-color);
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .type-checkbox {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.4rem 0.8rem;
+            border-radius: 20px;
+            margin: 0.25rem;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+
+        .type-checkbox.exclude {
+            background: #fee2e2;
+            border: 1px solid #fca5a5;
+        }
+
+        .type-checkbox.include {
+            background: #dcfce7;
+            border: 1px solid #86efac;
+        }
+
+        .type-checkbox input {
+            margin-right: 0.5rem;
+        }
+
+        .data-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.05);
+            overflow: hidden;
+        }
+
+        .data-card .card-header {
+            background: var(--primary-color);
+            color: white;
+            padding: 1rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn-export {
+            background: var(--success-color);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            color: white;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .btn-export:hover {
+            background: #219a52;
+            transform: translateY(-1px);
+        }
+
+        .table-container {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .table thead th {
+            position: sticky;
+            top: 0;
+            background: #f8f9fa;
+            z-index: 10;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        .table tbody tr:hover {
+            background: #f0f7ff;
+        }
+
+        .qty-in {
+            color: var(--success-color);
+            font-weight: 600;
+        }
+
+        .qty-out {
+            color: var(--danger-color);
+            font-weight: 600;
+        }
+
+        .type-badge {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .type-badge.receipt { background: #dbeafe; color: #1e40af; }
+        .type-badge.issue { background: #fee2e2; color: #991b1b; }
+        .type-badge.transfer { background: #fef3c7; color: #92400e; }
+        .type-badge.disassemble { background: #f3e8ff; color: #6b21a8; }
+
+        .summary-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.05);
+        }
+
+        .summary-card .number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-color);
+        }
+
+        .summary-card .label {
+            color: #6b7280;
+            font-size: 0.9rem;
+        }
+
+        .tab-content {
+            padding: 1rem 0;
+        }
+
+        .nav-tabs .nav-link {
+            color: var(--primary-color);
+            font-weight: 500;
+        }
+
+        .nav-tabs .nav-link.active {
+            color: var(--secondary-color);
+            border-bottom: 2px solid var(--secondary-color);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 3rem;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+            color: var(--secondary-color);
+        }
+
+        #totalCount {
+            background: var(--secondary-color);
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- 통합 상단 네비게이션 -->
+    <div class="top-nav">
+        <div class="container">
+            <a href="/"><i class="bi bi-people me-1"></i>작업자 분석</a>
+            <a href="/stock/" class="active"><i class="bi bi-box-seam me-1"></i>재고 원장</a>
+            <span class="float-end text-secondary">KMTech 통합 대시보드</span>
+        </div>
+    </div>
+
+    <nav class="navbar navbar-dark mb-4">
+        <div class="container">
+            <span class="navbar-brand mb-0 h1">
+                <i class="bi bi-box-seam me-2"></i>재고 원장 대시보드
+            </span>
+            <span class="text-white-50 small">ERPNext 연동</span>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- 필터 섹션 -->
+        <div class="filter-card">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5><i class="bi bi-funnel me-2"></i>조회 조건</h5>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">시작일</label>
+                            <input type="date" id="fromDate" class="form-control" value="{{ default_from }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">종료일</label>
+                            <input type="date" id="toDate" class="form-control" value="{{ default_to }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">창고</label>
+                            <select id="warehouse" class="form-select">
+                                <option value="">전체</option>
+                                {% for wh in warehouses %}
+                                <option value="{{ wh.name }}">{{ wh.warehouse_name or wh.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">품목 검색</label>
+                            <input type="text" id="itemSearch" class="form-control" placeholder="품목코드 또는 품목명 입력">
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <h5><i class="bi bi-filter-circle me-2"></i>유형 필터 (체크 해제 시 제외)</h5>
+                    <div class="type-filters">
+                        {% for type_key, type_name in entry_types.items() %}
+                        <label class="type-checkbox {% if type_key in default_exclude %}exclude{% else %}include{% endif %}">
+                            <input type="checkbox" name="include_type" value="{{ type_key }}"
+                                   {% if type_key not in default_exclude %}checked{% endif %}
+                                   onchange="updateTypeStyle(this)">
+                            {{ type_name }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <div class="mt-3">
+                        <button class="btn btn-primary me-2" onclick="loadData()">
+                            <i class="bi bi-search me-1"></i>조회
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="resetFilters()">
+                            <i class="bi bi-arrow-counterclockwise me-1"></i>초기화
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 요약 카드 -->
+        <div class="row mb-4" id="summaryCards">
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="number" id="totalTransactions">-</div>
+                    <div class="label">총 거래 건수</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="number qty-in" id="totalIn">-</div>
+                    <div class="label">총 입고 수량</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="number qty-out" id="totalOut">-</div>
+                    <div class="label">총 출고 수량</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="number" id="totalItems">-</div>
+                    <div class="label">품목 수</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 탭 네비게이션 -->
+        <ul class="nav nav-tabs" role="tablist">
+            <li class="nav-item">
+                <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#ledgerTab">
+                    <i class="bi bi-list-ul me-1"></i>상세 원장
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#summaryTab">
+                    <i class="bi bi-bar-chart me-1"></i>품목별 요약
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content">
+            <!-- 상세 원장 탭 -->
+            <div class="tab-pane fade show active" id="ledgerTab">
+                <div class="data-card">
+                    <div class="card-header">
+                        <span><i class="bi bi-table me-2"></i>재고 원장 <span id="totalCount" class="ms-2">0건</span></span>
+                        <button class="btn-export" onclick="exportExcel('ledger')">
+                            <i class="bi bi-file-earmark-excel me-1"></i>Excel 다운로드
+                        </button>
+                    </div>
+                    <div class="loading" id="loadingLedger">
+                        <div class="spinner-border" role="status"></div>
+                        <p class="mt-3 text-muted">데이터를 불러오는 중...</p>
+                    </div>
+                    <div class="table-container" id="ledgerContainer">
+                        <table class="table table-hover mb-0" id="ledgerTable">
+                            <thead>
+                                <tr>
+                                    <th>일시</th>
+                                    <th>품목코드</th>
+                                    <th>품목명</th>
+                                    <th>창고</th>
+                                    <th class="text-end">입고</th>
+                                    <th class="text-end">출고</th>
+                                    <th class="text-end">잔량</th>
+                                    <th>유형</th>
+                                    <th>전표번호</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ledgerBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 품목별 요약 탭 -->
+            <div class="tab-pane fade" id="summaryTab">
+                <div class="data-card">
+                    <div class="card-header">
+                        <span><i class="bi bi-pie-chart me-2"></i>품목별 요약</span>
+                        <button class="btn-export" onclick="exportExcel('summary')">
+                            <i class="bi bi-file-earmark-excel me-1"></i>Excel 다운로드
+                        </button>
+                    </div>
+                    <div class="loading" id="loadingSummary">
+                        <div class="spinner-border" role="status"></div>
+                        <p class="mt-3 text-muted">데이터를 불러오는 중...</p>
+                    </div>
+                    <div class="table-container" id="summaryContainer">
+                        <table class="table table-hover mb-0" id="summaryTable">
+                            <thead>
+                                <tr>
+                                    <th>품목코드</th>
+                                    <th>품목명</th>
+                                    <th class="text-end">총 입고</th>
+                                    <th class="text-end">총 출고</th>
+                                    <th class="text-end">순이동</th>
+                                    <th class="text-end">거래건수</th>
+                                </tr>
+                            </thead>
+                            <tbody id="summaryBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const API_BASE = '/stock/';
+        const DEMO_MODE = {{ 'true' if demo_mode else 'false' }};
+
+        document.addEventListener('DOMContentLoaded', function() {
+            if (DEMO_MODE) {
+                console.log('🎭 데모 모드 활성화 - 더미 데이터 사용');
+            }
+            loadData();
+        });
+
+        function getFilters() {
+            const fromDate = document.getElementById('fromDate').value;
+            const toDate = document.getElementById('toDate').value;
+            const warehouse = document.getElementById('warehouse').value;
+            const itemSearch = document.getElementById('itemSearch').value;
+
+            const excludeTypes = [];
+            document.querySelectorAll('input[name="include_type"]:not(:checked)').forEach(cb => {
+                excludeTypes.push(cb.value);
+            });
+
+            return { fromDate, toDate, warehouse, itemSearch, excludeTypes };
+        }
+
+        function buildQueryString(filters) {
+            const params = new URLSearchParams();
+            params.append('from_date', filters.fromDate);
+            params.append('to_date', filters.toDate);
+            if (filters.warehouse) params.append('warehouse', filters.warehouse);
+            if (filters.itemSearch) params.append('item_search', filters.itemSearch);
+            filters.excludeTypes.forEach(t => params.append('exclude_types', t));
+            return params.toString();
+        }
+
+        async function loadData() {
+            const filters = getFilters();
+            loadLedger(filters);
+            loadSummary(filters);
+        }
+
+        async function loadLedger(filters) {
+            const loading = document.getElementById('loadingLedger');
+            const container = document.getElementById('ledgerContainer');
+            loading.classList.add('active');
+            container.style.display = 'none';
+
+            try {
+                const endpoint = DEMO_MODE ? 'api/demo/stock-ledger' : 'api/stock-ledger';
+                const response = await fetch(API_BASE + endpoint + '?' + buildQueryString(filters));
+                const result = await response.json();
+
+                const tbody = document.getElementById('ledgerBody');
+                tbody.innerHTML = '';
+
+                let totalIn = 0, totalOut = 0;
+
+                result.data.forEach(row => {
+                    totalIn += row.in_qty || 0;
+                    totalOut += row.out_qty || 0;
+
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${row.date || ''}</td>
+                        <td><code>${row.item_code || ''}</code></td>
+                        <td>${row.item_name || ''}</td>
+                        <td>${row.warehouse || ''}</td>
+                        <td class="text-end qty-in">${row.in_qty ? row.in_qty.toLocaleString() : ''}</td>
+                        <td class="text-end qty-out">${row.out_qty ? row.out_qty.toLocaleString() : ''}</td>
+                        <td class="text-end">${row.balance_qty ? row.balance_qty.toLocaleString() : ''}</td>
+                        <td>${getTypeBadge(row.stock_entry_type_kr, row.stock_entry_type)}</td>
+                        <td><small>${row.voucher_no || ''}</small></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+                document.getElementById('totalCount').textContent = result.count.toLocaleString() + '건';
+                document.getElementById('totalTransactions').textContent = result.count.toLocaleString();
+                document.getElementById('totalIn').textContent = totalIn.toLocaleString();
+                document.getElementById('totalOut').textContent = totalOut.toLocaleString();
+
+            } catch (error) {
+                console.error('Error loading ledger:', error);
+                document.getElementById('ledgerBody').innerHTML =
+                    '<tr><td colspan="9" class="text-center text-danger">데이터 로드 실패</td></tr>';
+            } finally {
+                loading.classList.remove('active');
+                container.style.display = 'block';
+            }
+        }
+
+        async function loadSummary(filters) {
+            const loading = document.getElementById('loadingSummary');
+            const container = document.getElementById('summaryContainer');
+            loading.classList.add('active');
+            container.style.display = 'none';
+
+            try {
+                const endpoint = DEMO_MODE ? 'api/demo/stock-summary' : 'api/stock-summary';
+                const response = await fetch(API_BASE + endpoint + '?' + buildQueryString(filters));
+                const result = await response.json();
+
+                const tbody = document.getElementById('summaryBody');
+                tbody.innerHTML = '';
+
+                result.data.forEach(row => {
+                    const netMove = (row.total_in || 0) - (row.total_out || 0);
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td><code>${row.item_code || ''}</code></td>
+                        <td>${row.item_name || ''}</td>
+                        <td class="text-end qty-in">${row.total_in ? row.total_in.toLocaleString() : '0'}</td>
+                        <td class="text-end qty-out">${row.total_out ? row.total_out.toLocaleString() : '0'}</td>
+                        <td class="text-end ${netMove >= 0 ? 'qty-in' : 'qty-out'}">${netMove.toLocaleString()}</td>
+                        <td class="text-end">${row.transaction_count || 0}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+                document.getElementById('totalItems').textContent = result.count.toLocaleString();
+
+            } catch (error) {
+                console.error('Error loading summary:', error);
+            } finally {
+                loading.classList.remove('active');
+                container.style.display = 'block';
+            }
+        }
+
+        function getTypeBadge(typeKr, typeEn) {
+            let badgeClass = '';
+            if (typeEn === 'Material Receipt') badgeClass = 'receipt';
+            else if (typeEn === 'Material Issue' || typeEn === 'Stock Delivery') badgeClass = 'issue';
+            else if (typeEn === 'Material Transfer') badgeClass = 'transfer';
+            else if (typeEn === 'Disassemble') badgeClass = 'disassemble';
+
+            return `<span class="type-badge ${badgeClass}">${typeKr || typeEn || ''}</span>`;
+        }
+
+        function updateTypeStyle(checkbox) {
+            const label = checkbox.parentElement;
+            if (checkbox.checked) {
+                label.classList.remove('exclude');
+                label.classList.add('include');
+            } else {
+                label.classList.remove('include');
+                label.classList.add('exclude');
+            }
+        }
+
+        function resetFilters() {
+            const today = new Date();
+            const monthAgo = new Date();
+            monthAgo.setMonth(monthAgo.getMonth() - 1);
+
+            document.getElementById('fromDate').value = monthAgo.toISOString().split('T')[0];
+            document.getElementById('toDate').value = today.toISOString().split('T')[0];
+            document.getElementById('warehouse').value = '';
+            document.getElementById('itemSearch').value = '';
+
+            document.querySelectorAll('input[name="include_type"]').forEach(cb => {
+                const isExcluded = ['Disassemble', 'Material Transfer'].includes(cb.value);
+                cb.checked = !isExcluded;
+                updateTypeStyle(cb);
+            });
+
+            loadData();
+        }
+
+        function exportExcel(type) {
+            const filters = getFilters();
+            const url = API_BASE + 'api/export-excel?' + buildQueryString(filters) + '&type=' + type;
+            window.location.href = url;
+        }
+    </script>
+</body>
+</html>
