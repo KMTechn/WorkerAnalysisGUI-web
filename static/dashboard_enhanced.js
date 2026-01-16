@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.loadingOverlay.classList.remove('hidden');
 
         try {
-            const response = await fetch('/api/data', {
+            const response = await fetch((typeof API_BASE !== 'undefined' ? API_BASE : '/') + 'api/data', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -92,6 +92,25 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.tabsContainer.innerHTML = '';
         let tabs;
 
+        // 공정 선택 드롭다운 추가 (모바일에서 햄버거 메뉴 대신 사용)
+        const processSelect = document.createElement('select');
+        processSelect.id = 'process-select';
+        processSelect.style.cssText = 'padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; background: #f8fafc; color: #374151; cursor: pointer; margin-right: 8px; font-weight: 500;';
+        processSelect.innerHTML = `
+            <option value="이적실" ${state.process_mode === '이적실' ? 'selected' : ''}>이적실</option>
+            <option value="검사실" ${state.process_mode === '검사실' ? 'selected' : ''}>검사실</option>
+            <option value="포장실" ${state.process_mode === '포장실' ? 'selected' : ''}>포장실</option>
+            <option value="전체 비교" ${state.process_mode === '전체 비교' ? 'selected' : ''}>전체 비교</option>
+        `;
+        processSelect.onchange = function() {
+            state.process_mode = this.value;
+            // 사이드바 라디오 버튼도 동기화
+            const radio = document.querySelector(`input[name="process_mode"][value="${this.value}"]`);
+            if (radio) radio.checked = true;
+            loadData();
+        };
+        elements.tabsContainer.appendChild(processSelect);
+
         if (state.process_mode === '전체 비교') {
             // 전체 비교 모드: 전체 비교 탭만
             tabs = ['전체 비교'];
@@ -115,21 +134,33 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.tabsContainer.appendChild(btn);
         });
 
-        // 기간 필터 추가
+        // 기간 필터 추가 (드롭다운 방식)
         const filterDiv = document.createElement('div');
-        filterDiv.style.cssText = 'display: inline-flex; gap: 8px; margin-left: auto; align-items: center; flex-wrap: wrap;';
+        filterDiv.style.cssText = 'display: inline-flex; gap: 8px; margin-left: auto; align-items: center;';
 
         // 현재 선택된 기간 계산
         const currentDays = Math.ceil((new Date(state.end_date) - new Date(state.start_date)) / (1000 * 60 * 60 * 24));
 
+        // 현재 선택 값 결정
+        let selectedValue = '30';
+        if (currentDays <= 1) selectedValue = '0';
+        else if (currentDays <= 7) selectedValue = '7';
+        else if (currentDays <= 30) selectedValue = '30';
+        else if (currentDays <= 90) selectedValue = '90';
+        else if (currentDays <= 180) selectedValue = '180';
+        else if (currentDays <= 365) selectedValue = '365';
+        else selectedValue = 'custom';
+
         filterDiv.innerHTML = `
-            <button class="btn-preset ${currentDays <= 1 ? 'active' : ''}" data-days="0">오늘</button>
-            <button class="btn-preset ${currentDays > 1 && currentDays <= 7 ? 'active' : ''}" data-days="7">1주일</button>
-            <button class="btn-preset ${currentDays > 7 && currentDays <= 30 ? 'active' : ''}" data-days="30">1개월</button>
-            <button class="btn-preset ${currentDays > 30 && currentDays <= 90 ? 'active' : ''}" data-days="90">분기</button>
-            <button class="btn-preset ${currentDays > 90 && currentDays <= 180 ? 'active' : ''}" data-days="180">6개월</button>
-            <button class="btn-preset ${currentDays > 180 ? 'active' : ''}" data-days="365">1년</button>
-            <button class="btn-preset" id="btn-custom-date">📅 커스텀</button>
+            <select id="period-select" style="padding: 6px 12px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 13px; background: white; color: #374151; cursor: pointer; min-width: 100px;">
+                <option value="0" ${selectedValue === '0' ? 'selected' : ''}>오늘</option>
+                <option value="7" ${selectedValue === '7' ? 'selected' : ''}>1주일</option>
+                <option value="30" ${selectedValue === '30' ? 'selected' : ''}>1개월</option>
+                <option value="90" ${selectedValue === '90' ? 'selected' : ''}>분기</option>
+                <option value="180" ${selectedValue === '180' ? 'selected' : ''}>6개월</option>
+                <option value="365" ${selectedValue === '365' ? 'selected' : ''}>1년</option>
+                <option value="custom" ${selectedValue === 'custom' ? 'selected' : ''}>📅 직접선택</option>
+            </select>
         `;
         elements.tabsContainer.appendChild(filterDiv);
 
@@ -138,7 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
         customDatePanel.id = 'custom-date-panel';
         customDatePanel.style.cssText = 'display: none; position: absolute; right: 0; top: 100%; margin-top: 8px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 1000;';
         customDatePanel.innerHTML = `
-            <div style="display: flex; gap: 10px; align-items: center;">
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                 <div>
                     <label style="display: block; font-size: 12px; color: #666; margin-bottom: 4px;">시작일</label>
                     <input type="date" id="custom-start-date" value="${state.start_date}" style="padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">
@@ -153,38 +184,31 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.tabsContainer.style.position = 'relative';
         elements.tabsContainer.appendChild(customDatePanel);
 
-        // 기간 필터 이벤트
-        filterDiv.querySelectorAll('.btn-preset').forEach(function(btn) {
-            btn.onclick = function() {
-                // 커스텀 버튼이면 패널 토글
-                if (btn.id === 'btn-custom-date') {
-                    const panel = document.getElementById('custom-date-panel');
-                    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-                    return;
-                }
+        // 기간 선택 드롭다운 이벤트
+        document.getElementById('period-select').onchange = function() {
+            const value = this.value;
 
-                // 패널 숨기기
-                document.getElementById('custom-date-panel').style.display = 'none';
+            if (value === 'custom') {
+                // 커스텀 선택 시 패널 표시
+                document.getElementById('custom-date-panel').style.display = 'block';
+                return;
+            }
 
-                filterDiv.querySelectorAll('.btn-preset').forEach(function(b) {
-                    b.classList.remove('active');
-                });
-                btn.classList.add('active');
+            // 패널 숨기기
+            document.getElementById('custom-date-panel').style.display = 'none';
 
-                const days = parseInt(btn.dataset.days);
-                if (days === 0) {
-                    // 오늘: 오늘 하루만 (시간별 그래프)
-                    state.start_date = new Date().toISOString().split('T')[0];
-                    state.end_date = new Date().toISOString().split('T')[0];
-                } else {
-                    // 1주일: 7일 (일별), 1개월: 30일 (일별), 분기: 90일 (주별), 6개월: 180일 (월별), 1년: 365일 (월별)
-                    state.start_date = getDateDaysAgo(days);
-                    state.end_date = new Date().toISOString().split('T')[0];
-                }
-                console.log('🔘 기간 필터:', btn.textContent, '→', state.start_date, '~', state.end_date, '(' + (days === 0 ? '1' : days) + '일)');
-                loadData();
-            };
-        });
+            const days = parseInt(value);
+            if (days === 0) {
+                // 오늘: 오늘 하루만
+                state.start_date = new Date().toISOString().split('T')[0];
+                state.end_date = new Date().toISOString().split('T')[0];
+            } else {
+                state.start_date = getDateDaysAgo(days);
+                state.end_date = new Date().toISOString().split('T')[0];
+            }
+            console.log('🔘 기간 필터:', this.options[this.selectedIndex].text, '→', state.start_date, '~', state.end_date);
+            loadData();
+        };
 
         // 커스텀 날짜 적용 이벤트
         setTimeout(function() {
@@ -267,7 +291,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadingDiv.classList.remove('hidden');
         loadingDiv.querySelector('#loading-message').textContent = 'Excel 파일 생성 중...';
 
-        fetch('/api/export_excel', {
+        fetch((typeof API_BASE !== 'undefined' ? API_BASE : '/') + 'api/export_excel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -311,55 +335,82 @@ document.addEventListener('DOMContentLoaded', () => {
         const avgTrayTime = kpis.avg_tray_time || 0;
         const fpy = kpis.avg_fpy || 0;
 
+        // 모바일 반응형 스타일
+        const isMobile = window.innerWidth <= 768;
+        const containerPadding = isMobile ? '16px' : '30px';
+        const kpiGridStyle = isMobile
+            ? 'display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px;'
+            : 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;';
+        const kpiPadding = isMobile ? '14px' : '20px';
+        const kpiFontSize = isMobile ? '22px' : '28px';
+        const chartPadding = isMobile ? '16px' : '25px';
+        const chartHeight = isMobile ? '180px' : '300px';
+
         container.innerHTML =
-            '<div style="padding: 30px;">' +
+            '<div style="padding: ' + containerPadding + ';">' +
 
-            // 날짜 범위 + 다운로드 버튼 (한 줄)
-            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">' +
-            '<div style="display: flex; align-items: center; gap: 8px; color: #374151;">' +
-            '<span style="font-size: 16px;">📅</span>' +
-            '<span style="font-size: 15px; font-weight: 600;">' + state.start_date + ' ~ ' + state.end_date + '</span>' +
-            '<span style="color: #9ca3af; margin: 0 8px;">|</span>' +
-            '<span style="font-size: 14px; color: #6b7280;">' + state.process_mode + '</span>' +
-            '</div>' +
-            '<button onclick="downloadExcel(\'생산 현황\')" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">' +
-            '📥 Excel 다운로드' +
-            '</button>' +
-            '</div>' +
+            // 날짜 범위 + 다운로드 버튼
+            (isMobile ?
+                // 모바일: 세로 배치
+                '<div style="margin-bottom: 16px;">' +
+                '<div style="display: flex; align-items: center; gap: 6px; color: #374151; margin-bottom: 10px;">' +
+                '<span style="font-size: 14px;">📅</span>' +
+                '<span style="font-size: 13px; font-weight: 600;">' + state.start_date + ' ~ ' + state.end_date + '</span>' +
+                '<span style="color: #9ca3af; margin: 0 4px;">|</span>' +
+                '<span style="font-size: 12px; color: #6b7280;">' + state.process_mode + '</span>' +
+                '</div>' +
+                '<button onclick="downloadExcel(\'생산 현황\')" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">' +
+                '📥 Excel 다운로드' +
+                '</button>' +
+                '</div>'
+                :
+                // 데스크탑: 가로 배치
+                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">' +
+                '<div style="display: flex; align-items: center; gap: 8px; color: #374151;">' +
+                '<span style="font-size: 16px;">📅</span>' +
+                '<span style="font-size: 15px; font-weight: 600;">' + state.start_date + ' ~ ' + state.end_date + '</span>' +
+                '<span style="color: #9ca3af; margin: 0 8px;">|</span>' +
+                '<span style="font-size: 14px; color: #6b7280;">' + state.process_mode + '</span>' +
+                '</div>' +
+                '<button onclick="downloadExcel(\'생산 현황\')" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">' +
+                '📥 Excel 다운로드' +
+                '</button>' +
+                '</div>'
+            ) +
 
-            // 핵심 생산량 메트릭 (최상단)
-            '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">' +
+            // 핵심 생산량 메트릭 (2x2 on mobile)
+            '<div style="' + kpiGridStyle + '">' +
 
             // 총 생산량
-            '<div style="background: white; border-left: 4px solid #2563eb; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">📦 총 생산량' + (state.process_mode === '포장실' ? ' (추정)' : '') + '</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #111827;">' + totalPcs.toLocaleString() + ' <span style="font-size: 14px; color: #2563eb;">PCS</span></div>' +
+            '<div style="background: white; border-left: 4px solid #2563eb; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">📦 총 생산량' + (state.process_mode === '포장실' ? ' (추정)' : '') + '</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + totalPcs.toLocaleString() + ' <span style="font-size: 12px; color: #2563eb;">PCS</span></div>' +
             '</div>' +
 
             // 총 트레이 수
-            '<div style="background: white; border-left: 4px solid #7c3aed; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">📋 총 트레이</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #111827;">' + totalTrays.toLocaleString() + ' <span style="font-size: 14px; color: #7c3aed;">개</span></div>' +
+            '<div style="background: white; border-left: 4px solid #7c3aed; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">📋 총 트레이</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + totalTrays.toLocaleString() + ' <span style="font-size: 12px; color: #7c3aed;">개</span></div>' +
             '</div>' +
 
             // 평균 작업 시간
-            '<div style="background: white; border-left: 4px solid #059669; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">⏱️ 평균 시간</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #111827;">' + Math.round(avgTrayTime) + ' <span style="font-size: 14px; color: #059669;">초/트레이</span></div>' +
+            '<div style="background: white; border-left: 4px solid #059669; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">⏱️ 평균 시간</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + Math.round(avgTrayTime) + ' <span style="font-size: 12px; color: #059669;">초</span></div>' +
             '</div>' +
 
             // FPY (품질)
-            '<div style="background: white; border-left: 4px solid #dc2626; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">✅ 품질 (FPY)</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #111827;">' + (fpy * 100).toFixed(1) + '<span style="font-size: 14px; color: #dc2626;">%</span></div>' +
+            '<div style="background: white; border-left: 4px solid #dc2626; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">✅ 품질 (FPY)</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + (fpy * 100).toFixed(1) + '<span style="font-size: 12px; color: #dc2626;">%</span></div>' +
             '</div>' +
 
             '</div>' +
 
             // 생산 추이 차트
-            '<div style="background: white; padding: 25px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px;">' +
-            '<h3 style="margin: 0 0 15px 0; color: #333;">📈 생산 추이</h3>' +
-            '<canvas id="productionTrendChart" style="max-height: 300px;"></canvas>' +
+            '<div style="background: white; padding: ' + chartPadding + '; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: ' + (isMobile ? '16px' : '20px') + ';">' +
+            '<h3 style="margin: 0 0 ' + (isMobile ? '10px' : '15px') + ' 0; color: #333; font-size: ' + (isMobile ? '15px' : '16px') + ';">📈 생산 추이</h3>' +
+            '<div style="height: ' + chartHeight + ';"><canvas id="productionTrendChart"></canvas></div>' +
             '</div>' +
 
             // 작업자 분석 테이블 (작업자 2명 이상인 경우만)
@@ -380,6 +431,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // 모바일 체크 함수
+    function isMobileView() {
+        return window.innerWidth <= 768;
+    }
+
     // 작업자 분석 테이블 (생산현황에 통합)
     function renderWorkerAnalysisTable(container, workers) {
         if (!container || !workers || workers.length < 2) return;
@@ -392,88 +448,233 @@ document.addEventListener('DOMContentLoaded', () => {
         const avgPcs = totalPcs / sortedWorkers.length;
         const maxPcs = sortedWorkers[0].total_pcs_completed || 0;
 
-        let tableRows = '';
-        sortedWorkers.forEach(function(w, index) {
-            const pcs = w.total_pcs_completed || 0;
-            const percentage = maxPcs > 0 ? (pcs / maxPcs * 100) : 0;
-            const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
-            const barColor = index === 0 ? '#ffd700' : index === 1 ? '#c0c0c0' : index === 2 ? '#cd7f32' : '#3b82f6';
-            const diff = pcs - avgPcs;
-            const diffText = diff >= 0 ? '+' + Math.round(diff).toLocaleString() : Math.round(diff).toLocaleString();
-            const diffColor = diff >= 0 ? '#10b981' : '#ef4444';
-            const workerId = 'worker-row-' + index;
-            const detailId = 'worker-detail-' + index;
-            const workerName = (w.worker || '').replace(/'/g, "\\'");
+        // 모바일: 카드형 레이아웃
+        if (isMobileView()) {
+            let cardItems = '';
+            sortedWorkers.forEach(function(w, index) {
+                const pcs = w.total_pcs_completed || 0;
+                const percentage = maxPcs > 0 ? (pcs / maxPcs * 100) : 0;
+                const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+                const barColor = index === 0 ? '#ffd700' : index === 1 ? '#c0c0c0' : index === 2 ? '#cd7f32' : '#3b82f6';
+                const diff = pcs - avgPcs;
+                const diffText = diff >= 0 ? '+' + Math.round(diff).toLocaleString() : Math.round(diff).toLocaleString();
+                const diffColor = diff >= 0 ? '#10b981' : '#ef4444';
+                const detailId = 'worker-detail-' + index;
+                const rankDisplay = medal || (index + 1) + '위';
 
-            // 메인 행
-            tableRows +=
-                '<tr id="' + workerId + '" style="border-bottom: 1px solid #f3f4f6; cursor: pointer; transition: background 0.2s;" onclick="toggleWorkerDetail(\'' + workerName + '\', \'' + detailId + '\', this)" onmouseover="this.style.background=\'#f9fafb\'" onmouseout="this.style.background=\'white\'">' +
-                '<td style="padding: 10px 8px; text-align: center; font-weight: bold; color: #6b7280;">' + (medal || (index + 1)) + '</td>' +
-                '<td style="padding: 10px 8px; font-weight: 600; color: #3b82f6;">' +
-                '<span style="display: inline-flex; align-items: center; gap: 6px;">' +
-                '<span class="toggle-icon" style="font-size: 10px; transition: transform 0.2s;">▶</span>' +
-                (w.worker || 'N/A') +
-                '</span>' +
-                '</td>' +
-                '<td style="padding: 10px 8px; width: 40%;">' +
-                '<div style="background: #f3f4f6; border-radius: 4px; height: 18px; overflow: hidden;">' +
-                '<div style="width: ' + percentage + '%; background: ' + barColor + '; height: 100%; border-radius: 4px;"></div>' +
+                cardItems +=
+                    '<div style="background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">' +
+                    '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">' +
+                    '<div style="display: flex; align-items: center; gap: 10px;">' +
+                    '<span style="font-size: 20px;">' + rankDisplay + '</span>' +
+                    '<span style="font-size: 16px; font-weight: 700; color: #1f2937;">' + (w.worker || 'N/A') + '</span>' +
+                    '</div>' +
+                    '<span style="font-size: 13px; color: ' + diffColor + '; font-weight: 600;">' + diffText + '</span>' +
+                    '</div>' +
+                    '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">' +
+                    '<span style="font-size: 24px; font-weight: 800; color: #111827;">' + pcs.toLocaleString() + ' <span style="font-size: 14px; color: #6b7280; font-weight: 500;">PCS</span></span>' +
+                    '</div>' +
+                    '<div style="background: #f3f4f6; border-radius: 6px; height: 10px; overflow: hidden;">' +
+                    '<div style="width: ' + percentage + '%; background: ' + barColor + '; height: 100%; border-radius: 6px;"></div>' +
+                    '</div>' +
+                    '<div id="' + detailId + '" style="margin-top: 12px;">' +
+                    '<div class="worker-detail-content" style="text-align: center; padding: 10px; color: #9ca3af; font-size: 13px;">상세 정보 로딩중...</div>' +
+                    '</div>' +
+                    '</div>';
+            });
+
+            container.innerHTML =
+                '<div style="margin-bottom: 20px;">' +
+                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 0 4px;">' +
+                '<h3 style="margin: 0; font-size: 18px; font-weight: 700; color: #111827;">🏆 작업자별 생산량</h3>' +
+                '<span style="font-size: 13px; color: #6b7280; background: #f3f4f6; padding: 4px 10px; border-radius: 12px;">평균 ' + Math.round(avgPcs).toLocaleString() + '</span>' +
                 '</div>' +
-                '</td>' +
-                '<td style="padding: 10px 8px; text-align: right; font-weight: bold;">' + pcs.toLocaleString() + '</td>' +
-                '<td style="padding: 10px 8px; text-align: right; color: ' + diffColor + '; font-size: 13px;">' + diffText + '</td>' +
-                '</tr>';
+                cardItems +
+                '</div>';
+        } else {
+            // 데스크탑: 테이블 레이아웃
+            let tableRows = '';
+            sortedWorkers.forEach(function(w, index) {
+                const pcs = w.total_pcs_completed || 0;
+                const percentage = maxPcs > 0 ? (pcs / maxPcs * 100) : 0;
+                const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+                const barColor = index === 0 ? '#ffd700' : index === 1 ? '#c0c0c0' : index === 2 ? '#cd7f32' : '#3b82f6';
+                const diff = pcs - avgPcs;
+                const diffText = diff >= 0 ? '+' + Math.round(diff).toLocaleString() : Math.round(diff).toLocaleString();
+                const diffColor = diff >= 0 ? '#10b981' : '#ef4444';
+                const detailId = 'worker-detail-' + index;
 
-            // 확장 상세 행 (숨김 상태로 시작)
-            tableRows +=
-                '<tr id="' + detailId + '" style="display: none;">' +
-                '<td colspan="5" style="padding: 0; background: #f8fafc;">' +
-                '<div class="worker-detail-content" style="padding: 15px 20px;">' +
-                '<div style="text-align: center; padding: 20px; color: #6b7280;">로딩 중...</div>' +
+                tableRows +=
+                    '<tr style="border-bottom: 1px solid #f3f4f6;">' +
+                    '<td style="padding: 10px 8px; text-align: center; font-weight: bold; color: #6b7280;">' + (medal || (index + 1)) + '</td>' +
+                    '<td style="padding: 10px 8px; font-weight: 600; color: #374151;">' + (w.worker || 'N/A') + '</td>' +
+                    '<td style="padding: 10px 8px; width: 40%;">' +
+                    '<div style="background: #f3f4f6; border-radius: 4px; height: 18px; overflow: hidden;">' +
+                    '<div style="width: ' + percentage + '%; background: ' + barColor + '; height: 100%; border-radius: 4px;"></div>' +
+                    '</div>' +
+                    '</td>' +
+                    '<td style="padding: 10px 8px; text-align: right; font-weight: bold;">' + pcs.toLocaleString() + '</td>' +
+                    '<td style="padding: 10px 8px; text-align: right; color: ' + diffColor + '; font-size: 13px;">' + diffText + '</td>' +
+                    '</tr>' +
+                    '<tr id="' + detailId + '">' +
+                    '<td colspan="5" style="padding: 0; background: #f8fafc;">' +
+                    '<div class="worker-detail-content" style="padding: 15px 20px;">' +
+                    '<div style="text-align: center; padding: 20px; color: #6b7280;"><div class="loading-spinner" style="display: inline-block; width: 24px; height: 24px; border: 3px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite;"></div></div>' +
+                    '</div>' +
+                    '</td>' +
+                    '</tr>';
+            });
+
+            container.innerHTML =
+                '<div style="background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px;">' +
+                '<div style="padding: 15px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">' +
+                '<h3 style="margin: 0; font-size: 16px; color: #374151;">🏆 작업자별 생산량</h3>' +
+                '<span style="font-size: 13px; color: #6b7280;">평균 ' + Math.round(avgPcs).toLocaleString() + ' PCS</span>' +
                 '</div>' +
-                '</td>' +
-                '</tr>';
-        });
+                '<table style="width: 100%; border-collapse: collapse;">' +
+                '<thead><tr style="background: #f9fafb;">' +
+                '<th style="padding: 10px 8px; text-align: center; width: 40px; font-size: 12px; color: #6b7280;">순위</th>' +
+                '<th style="padding: 10px 8px; text-align: left; min-width: 70px; font-size: 12px; color: #6b7280;">작업자</th>' +
+                '<th style="padding: 10px 8px; text-align: left; min-width: 120px; font-size: 12px; color: #6b7280;">생산량</th>' +
+                '<th style="padding: 10px 8px; text-align: right; width: 80px; font-size: 12px; color: #6b7280;">PCS</th>' +
+                '<th style="padding: 10px 8px; text-align: right; width: 60px; font-size: 12px; color: #6b7280;">평균대비</th>' +
+                '</tr></thead>' +
+                '<tbody>' + tableRows + '</tbody>' +
+                '</table>' +
+                '</div>';
+        }
 
-        container.innerHTML =
-            '<div style="background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px;">' +
-            '<div style="padding: 15px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">' +
-            '<h3 style="margin: 0; font-size: 16px; color: #374151;">🏆 작업자별 생산량 <span style="font-size: 12px; color: #9ca3af; font-weight: normal;">(클릭하여 접기/펼치기)</span></h3>' +
-            '<span style="font-size: 13px; color: #6b7280;">평균 ' + Math.round(avgPcs).toLocaleString() + ' PCS</span>' +
-            '</div>' +
-            '<table style="width: 100%; border-collapse: collapse;">' +
-            '<thead><tr style="background: #f9fafb;">' +
-            '<th style="padding: 10px 8px; text-align: center; width: 50px; font-size: 12px; color: #6b7280;">순위</th>' +
-            '<th style="padding: 10px 8px; text-align: left; width: 100px; font-size: 12px; color: #6b7280;">작업자</th>' +
-            '<th style="padding: 10px 8px; text-align: left; font-size: 12px; color: #6b7280;">생산량</th>' +
-            '<th style="padding: 10px 8px; text-align: right; width: 90px; font-size: 12px; color: #6b7280;">PCS</th>' +
-            '<th style="padding: 10px 8px; text-align: right; width: 70px; font-size: 12px; color: #6b7280;">평균대비</th>' +
-            '</tr></thead>' +
-            '<tbody>' + tableRows + '</tbody>' +
-            '</table>' +
-            '</div>';
-
-        // 모든 작업자 상세 정보 자동 펼치기
+        // 모든 작업자 상세 정보 자동 로드 (시간대 범위 통일: 기본 7~20시)
         setTimeout(function() {
+            // 전역 시간 범위: 기본 7시~20시, 벗어나는 작업 있으면 확장
+            window.workerHourlyDataStore = {};
+            window.globalHourRange = { min: 7, max: 20 };  // 기본값 고정
+            let loadedCount = 0;
+            const totalWorkers = sortedWorkers.length;
+
             sortedWorkers.forEach(function(w, index) {
                 const detailId = 'worker-detail-' + index;
-                const rowElement = document.getElementById('worker-row-' + index);
-                const workerName = (w.worker || '').replace(/'/g, "\\'");
-                if (rowElement && window.toggleWorkerDetail) {
-                    // 순차적으로 로드 (서버 부하 분산)
-                    setTimeout(function() {
-                        toggleWorkerDetail(workerName, detailId, rowElement);
-                    }, index * 100);
-                }
+                const workerName = (w.worker || '');
+                // 순차적으로 로드 (서버 부하 분산)
+                setTimeout(function() {
+                    loadWorkerDetail(workerName, detailId, function(hourlyData) {
+                        // 항상 detailId 저장 (데이터 없어도)
+                        window.workerHourlyDataStore[detailId] = hourlyData || { labels: [], values: [] };
+
+                        // 시간 범위 업데이트 (7시 이전이나 20시 이후 작업 있으면 확장)
+                        if (hourlyData && hourlyData.values && hourlyData.labels) {
+                            for (let i = 0; i < hourlyData.values.length; i++) {
+                                if (hourlyData.values[i] > 0) {
+                                    const hourMatch = String(hourlyData.labels[i]).match(/(\d+)/);
+                                    if (hourMatch) {
+                                        const hour = parseInt(hourMatch[1]);
+                                        if (!isNaN(hour)) {
+                                            if (hour < window.globalHourRange.min) window.globalHourRange.min = hour;
+                                            if (hour > window.globalHourRange.max) window.globalHourRange.max = hour;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        loadedCount++;
+                        // 모든 작업자 로드 완료 시 차트 재렌더링 (DOM 렌더링 대기)
+                        if (loadedCount === totalWorkers) {
+                            console.log('🕐 전역 시간 범위:', window.globalHourRange.min + '시 ~', window.globalHourRange.max + '시');
+                            console.log('📊 저장된 작업자 수:', Object.keys(window.workerHourlyDataStore).length);
+                            // DOM이 완전히 렌더링된 후 차트 생성
+                            setTimeout(function() {
+                                updateAllHourlyCharts();
+                            }, 300);
+                        }
+                    });
+                }, index * 100);
             });
         }, 100);
     }
 
-    // HR 대시보드 (입사/퇴사 분석)
+    // 모든 작업자의 시간대별 차트를 동일 범위로 재렌더링
+    function updateAllHourlyCharts() {
+        const range = window.globalHourRange;
+        console.log('🔄 차트 재렌더링 시작, 범위:', range.min + '시 ~', range.max + '시');
+
+        Object.keys(window.workerHourlyDataStore).forEach(function(detailId) {
+            const hourlyData = window.workerHourlyDataStore[detailId] || { labels: [], values: [] };
+
+            const hourlyChartId = 'hourly-chart-' + detailId;
+            const hourlyCtx = document.getElementById(hourlyChartId);
+            if (!hourlyCtx) {
+                console.log('❌ 캔버스 없음:', hourlyChartId);
+                return;
+            }
+
+            // 기존 차트 제거
+            if (window.workerDetailCharts && window.workerDetailCharts[detailId] && window.workerDetailCharts[detailId].hourly) {
+                window.workerDetailCharts[detailId].hourly.destroy();
+            }
+            if (!window.workerDetailCharts) {
+                window.workerDetailCharts = {};
+            }
+            if (!window.workerDetailCharts[detailId]) {
+                window.workerDetailCharts[detailId] = {};
+            }
+
+            // hourlyData에서 시간→값 매핑 생성
+            const hourValueMap = {};
+            const labels = hourlyData.labels || [];
+            const values = hourlyData.values || [];
+            for (let i = 0; i < labels.length; i++) {
+                const hourMatch = String(labels[i]).match(/(\d+)/);
+                if (hourMatch) {
+                    hourValueMap[parseInt(hourMatch[1])] = values[i] || 0;
+                }
+            }
+
+            // 전역 범위로 라벨/값 생성 (7시~20시 기본)
+            const rangeLabels = [];
+            const rangeValues = [];
+            for (let h = range.min; h <= range.max; h++) {
+                rangeLabels.push(h + '시');
+                rangeValues.push(hourValueMap[h] || 0);
+            }
+
+            console.log('📊 차트 생성:', detailId, '라벨:', rangeLabels.length + '개');
+
+            // 새 차트 생성
+            try {
+                window.workerDetailCharts[detailId].hourly = new Chart(hourlyCtx.getContext('2d'), {
+                    type: 'bar',
+                    data: {
+                        labels: rangeLabels,
+                        datasets: [{
+                            data: rangeValues,
+                            backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                            borderColor: 'rgba(59, 130, 246, 1)',
+                            borderWidth: 1,
+                            borderRadius: 3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+                            x: { ticks: { font: { size: 9 }, maxRotation: 0 } }
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error('❌ 차트 생성 실패:', detailId, e);
+            }
+        });
+    }
+
+    // HR 대시보드 (입사/퇴사 분석) - 전체 데이터 사용 (날짜 필터 무시)
     function renderHRDashboard(container, data) {
-        const sessions = data.filtered_sessions_data || [];
+        // HR은 전체 기간 데이터 사용 (hr_sessions_data)
+        const sessions = data.hr_sessions_data || data.filtered_sessions_data || [];
         const today = new Date();
-        const oneWeekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const oneMonthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
 
         // 작업자별 첫 작업일, 마지막 작업일 계산
         const workerStats = {};
@@ -510,7 +711,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // 재직/퇴사 분류 및 재직기간 계산
         const workers = Object.values(workerStats).map(function(w) {
             const tenure = Math.ceil((w.lastDate - w.firstDate) / (1000 * 60 * 60 * 24)) + 1;
-            const isResigned = w.lastDate < oneWeekAgo;
+            const isResigned = w.lastDate < oneMonthAgo;
             return {
                 worker: w.worker,
                 firstDate: w.firstDate,
@@ -547,87 +748,136 @@ document.addEventListener('DOMContentLoaded', () => {
                    String(date.getDate()).padStart(2, '0');
         }
 
-        // 테이블 행 생성
-        let tableRows = '';
-        workers.forEach(function(w) {
-            const statusColor = w.isResigned ? '#ef4444' : '#10b981';
-            const statusBg = w.isResigned ? '#fef2f2' : '#f0fdf4';
+        // 모바일/데스크탑 분기
+        let workerListHtml = '';
 
-            tableRows +=
-                '<tr style="border-bottom: 1px solid #f3f4f6;">' +
-                '<td style="padding: 12px 10px; font-weight: 600;">' + w.worker + '</td>' +
-                '<td style="padding: 12px 10px;">' + formatDateShort(w.firstDate) + '</td>' +
-                '<td style="padding: 12px 10px;">' + formatDateShort(w.lastDate) + '</td>' +
-                '<td style="padding: 12px 10px; text-align: center; font-weight: bold;">' + w.tenure + '일</td>' +
-                '<td style="padding: 12px 10px; text-align: right;">' + w.sessionCount.toLocaleString() + '</td>' +
-                '<td style="padding: 12px 10px; text-align: right;">' + w.totalPcs.toLocaleString() + '</td>' +
-                '<td style="padding: 12px 10px; text-align: center;">' +
-                '<span style="padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; background: ' + statusBg + '; color: ' + statusColor + ';">' + w.status + '</span>' +
-                '</td>' +
-                '</tr>';
-        });
+        if (isMobileView()) {
+            // 모바일: 카드형 레이아웃
+            workers.forEach(function(w) {
+                const statusColor = w.isResigned ? '#ef4444' : '#10b981';
+                const statusBg = w.isResigned ? '#fef2f2' : '#f0fdf4';
+                const statusIcon = w.isResigned ? '❌' : '✅';
+
+                workerListHtml +=
+                    '<div style="background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-left: 4px solid ' + statusColor + ';">' +
+                    '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">' +
+                    '<span style="font-size: 17px; font-weight: 700; color: #1f2937;">' + w.worker + '</span>' +
+                    '<span style="padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; background: ' + statusBg + '; color: ' + statusColor + ';">' + statusIcon + ' ' + w.status + '</span>' +
+                    '</div>' +
+                    '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">' +
+                    '<div style="background: #f9fafb; padding: 10px; border-radius: 8px;">' +
+                    '<div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">재직기간</div>' +
+                    '<div style="font-size: 18px; font-weight: 700; color: #111827;">' + w.tenure + '<span style="font-size: 12px; color: #6b7280;">일</span></div>' +
+                    '</div>' +
+                    '<div style="background: #f9fafb; padding: 10px; border-radius: 8px;">' +
+                    '<div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">총 생산량</div>' +
+                    '<div style="font-size: 18px; font-weight: 700; color: #111827;">' + w.totalPcs.toLocaleString() + '</div>' +
+                    '</div>' +
+                    '</div>' +
+                    '<div style="margin-top: 10px; font-size: 12px; color: #6b7280;">' +
+                    '<span>' + formatDateShort(w.firstDate) + '</span>' +
+                    '<span style="margin: 0 6px;">→</span>' +
+                    '<span>' + formatDateShort(w.lastDate) + '</span>' +
+                    '<span style="margin-left: 10px;">(' + w.sessionCount.toLocaleString() + '건)</span>' +
+                    '</div>' +
+                    '</div>';
+            });
+        } else {
+            // 데스크탑: 테이블 레이아웃
+            let tableRows = '';
+            workers.forEach(function(w) {
+                const statusColor = w.isResigned ? '#ef4444' : '#10b981';
+                const statusBg = w.isResigned ? '#fef2f2' : '#f0fdf4';
+
+                tableRows +=
+                    '<tr style="border-bottom: 1px solid #f3f4f6;">' +
+                    '<td style="padding: 12px 10px; font-weight: 600;">' + w.worker + '</td>' +
+                    '<td style="padding: 12px 10px;">' + formatDateShort(w.firstDate) + '</td>' +
+                    '<td style="padding: 12px 10px;">' + formatDateShort(w.lastDate) + '</td>' +
+                    '<td style="padding: 12px 10px; text-align: center; font-weight: bold;">' + w.tenure + '일</td>' +
+                    '<td style="padding: 12px 10px; text-align: right;">' + w.sessionCount.toLocaleString() + '</td>' +
+                    '<td style="padding: 12px 10px; text-align: right;">' + w.totalPcs.toLocaleString() + '</td>' +
+                    '<td style="padding: 12px 10px; text-align: center;">' +
+                    '<span style="padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; background: ' + statusBg + '; color: ' + statusColor + ';">' + w.status + '</span>' +
+                    '</td>' +
+                    '</tr>';
+            });
+
+            workerListHtml =
+                '<div style="background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+                '<div style="padding: 15px 20px; border-bottom: 1px solid #e5e7eb;">' +
+                '<h3 style="margin: 0; font-size: 16px; color: #374151;">📋 작업자 현황</h3>' +
+                '</div>' +
+                '<table style="width: 100%; border-collapse: collapse;">' +
+                '<thead><tr style="background: #f9fafb;">' +
+                '<th style="padding: 12px 10px; text-align: left; font-size: 12px; color: #6b7280;">작업자</th>' +
+                '<th style="padding: 12px 10px; text-align: left; font-size: 12px; color: #6b7280;">첫 작업일</th>' +
+                '<th style="padding: 12px 10px; text-align: left; font-size: 12px; color: #6b7280;">마지막 작업일</th>' +
+                '<th style="padding: 12px 10px; text-align: center; font-size: 12px; color: #6b7280;">재직기간</th>' +
+                '<th style="padding: 12px 10px; text-align: right; font-size: 12px; color: #6b7280;">작업수</th>' +
+                '<th style="padding: 12px 10px; text-align: right; font-size: 12px; color: #6b7280;">총 생산량</th>' +
+                '<th style="padding: 12px 10px; text-align: center; font-size: 12px; color: #6b7280;">상태</th>' +
+                '</tr></thead>' +
+                '<tbody>' + tableRows + '</tbody>' +
+                '</table>' +
+                '</div>';
+        }
+
+        // 모바일용 KPI 그리드
+        const kpiGridStyle = isMobileView()
+            ? 'display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 20px;'
+            : 'display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 25px;';
+
+        const kpiPadding = isMobileView() ? '14px' : '20px';
+        const kpiFontSize = isMobileView() ? '22px' : '28px';
 
         container.innerHTML =
-            '<div style="padding: 20px;">' +
+            '<div style="padding: ' + (isMobileView() ? '12px' : '20px') + ';">' +
 
             // 헤더
-            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">' +
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: ' + (isMobileView() ? '16px' : '20px') + ';">' +
             '<div style="display: flex; align-items: center; gap: 8px; color: #374151;">' +
             '<span style="font-size: 16px;">👥</span>' +
-            '<span style="font-size: 15px; font-weight: 600;">HR 분석</span>' +
-            '<span style="color: #9ca3af; margin: 0 8px;">|</span>' +
-            '<span style="font-size: 14px; color: #6b7280;">' + state.process_mode + '</span>' +
+            '<span style="font-size: ' + (isMobileView() ? '16px' : '15px') + '; font-weight: 600;">HR 분석</span>' +
             '</div>' +
             '</div>' +
 
             // KPI 카드
-            '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 25px;">' +
+            '<div style="' + kpiGridStyle + '">' +
 
-            '<div style="background: white; border-left: 4px solid #10b981; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">✅ 재직자</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #10b981;">' + activeWorkers.length + '<span style="font-size: 14px; color: #6b7280;">명</span></div>' +
+            '<div style="background: white; border-left: 4px solid #10b981; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">✅ 재직자</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #10b981;">' + activeWorkers.length + '<span style="font-size: 13px; color: #6b7280;">명</span></div>' +
             '</div>' +
 
-            '<div style="background: white; border-left: 4px solid #ef4444; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">❌ 퇴사자</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #ef4444;">' + resignedWorkers.length + '<span style="font-size: 14px; color: #6b7280;">명</span></div>' +
+            '<div style="background: white; border-left: 4px solid #ef4444; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">❌ 퇴사자</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #ef4444;">' + resignedWorkers.length + '<span style="font-size: 13px; color: #6b7280;">명</span></div>' +
             '</div>' +
 
-            '<div style="background: white; border-left: 4px solid #3b82f6; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">📊 평균 재직기간</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #3b82f6;">' + avgTenure + '<span style="font-size: 14px; color: #6b7280;">일</span></div>' +
+            '<div style="background: white; border-left: 4px solid #3b82f6; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">📊 평균 재직</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #3b82f6;">' + avgTenure + '<span style="font-size: 13px; color: #6b7280;">일</span></div>' +
             '</div>' +
 
-            '<div style="background: white; border-left: 4px solid #f59e0b; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">⏱️ 퇴사자 평균 재직</div>' +
-            '<div style="font-size: 28px; font-weight: bold; color: #f59e0b;">' + avgResignedTenure + '<span style="font-size: 14px; color: #6b7280;">일</span></div>' +
+            '<div style="background: white; border-left: 4px solid #f59e0b; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
+            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">⏱️ 퇴사자 평균</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #f59e0b;">' + avgResignedTenure + '<span style="font-size: 13px; color: #6b7280;">일</span></div>' +
             '</div>' +
 
             '</div>' +
 
             // 안내 문구
-            '<div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 15px; border-radius: 6px; margin-bottom: 20px; font-size: 13px; color: #92400e;">' +
-            '💡 1주일 이상 작업 기록이 없는 작업자는 퇴사자로 분류됩니다.' +
+            '<div style="background: #dbeafe; border-left: 4px solid #3b82f6; padding: 10px 12px; border-radius: 6px; margin-bottom: 10px; font-size: 12px; color: #1e40af;">' +
+            '📊 HR 탭은 <b>전체 기간</b> 데이터를 표시합니다.' +
+            '</div>' +
+            '<div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 10px 12px; border-radius: 6px; margin-bottom: 16px; font-size: 12px; color: #92400e;">' +
+            '💡 1주일 이상 작업 기록이 없으면 퇴사자로 분류' +
             '</div>' +
 
-            // 테이블
-            '<div style="background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="padding: 15px 20px; border-bottom: 1px solid #e5e7eb;">' +
-            '<h3 style="margin: 0; font-size: 16px; color: #374151;">📋 작업자 현황</h3>' +
-            '</div>' +
-            '<table style="width: 100%; border-collapse: collapse;">' +
-            '<thead><tr style="background: #f9fafb;">' +
-            '<th style="padding: 12px 10px; text-align: left; font-size: 12px; color: #6b7280;">작업자</th>' +
-            '<th style="padding: 12px 10px; text-align: left; font-size: 12px; color: #6b7280;">첫 작업일</th>' +
-            '<th style="padding: 12px 10px; text-align: left; font-size: 12px; color: #6b7280;">마지막 작업일</th>' +
-            '<th style="padding: 12px 10px; text-align: center; font-size: 12px; color: #6b7280;">재직기간</th>' +
-            '<th style="padding: 12px 10px; text-align: right; font-size: 12px; color: #6b7280;">작업수</th>' +
-            '<th style="padding: 12px 10px; text-align: right; font-size: 12px; color: #6b7280;">총 생산량</th>' +
-            '<th style="padding: 12px 10px; text-align: center; font-size: 12px; color: #6b7280;">상태</th>' +
-            '</tr></thead>' +
-            '<tbody>' + tableRows + '</tbody>' +
-            '</table>' +
-            '</div>' +
+            // 작업자 목록 (모바일: 카드 / 데스크탑: 테이블)
+            (isMobileView() ? '<h3 style="font-size: 16px; font-weight: 700; color: #111827; margin-bottom: 12px;">📋 작업자 현황</h3>' : '') +
+            workerListHtml +
 
             '</div>';
     }
@@ -795,6 +1045,8 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('📊 차트 타입:', chartType, '| 제목:', chartTitle, '| 데이터 포인트:', labels.length, '| 과거 평균:', avgLabel);
 
         const ctx = document.getElementById(canvasId);
+        const isMobileChart = window.innerWidth <= 768;
+
         if (ctx) {
             state.charts[canvasId] = new Chart(ctx, {
                 type: chartType,
@@ -805,7 +1057,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         data: values,
                         backgroundColor: 'rgba(102, 126, 234, 0.7)',
                         borderColor: '#667eea',
-                        borderWidth: 2,
+                        borderWidth: isMobileChart ? 1 : 2,
                         type: 'bar'
                     }, {
                         label: avgLabel,
@@ -813,22 +1065,22 @@ document.addEventListener('DOMContentLoaded', () => {
                         type: 'line',
                         borderColor: '#ff6b6b',
                         backgroundColor: 'rgba(255, 107, 107, 0.1)',
-                        borderWidth: 2,
+                        borderWidth: isMobileChart ? 1 : 2,
                         borderDash: [5, 5],
                         fill: false,
-                        pointRadius: 4,
+                        pointRadius: isMobileChart ? 2 : 4,
                         pointBackgroundColor: '#ff6b6b',
                         pointBorderColor: '#fff',
-                        pointBorderWidth: 2,
+                        pointBorderWidth: isMobileChart ? 1 : 2,
                         tension: 0
                     }]
                 },
                 options: {
                     responsive: true,
-                    maintainAspectRatio: true,
+                    maintainAspectRatio: false,
                     plugins: {
                         legend: {
-                            display: true,
+                            display: !isMobileChart,
                             position: 'top',
                             labels: {
                                 usePointStyle: true,
@@ -837,7 +1089,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         },
                         title: {
-                            display: true,
+                            display: !isMobileChart,
                             text: chartTitle,
                             font: { size: 16, weight: 'bold' }
                         }
@@ -845,11 +1097,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     scales: {
                         y: {
                             beginAtZero: true,
-                            ticks: { color: '#666' },
-                            title: { display: true, text: 'PCS' }
+                            ticks: { color: '#666', font: { size: isMobileChart ? 9 : 11 } },
+                            title: { display: !isMobileChart, text: 'PCS' }
                         },
                         x: {
-                            ticks: { color: '#666' }
+                            ticks: { color: '#666', font: { size: isMobileChart ? 9 : 11 }, maxRotation: isMobileChart ? 45 : 0 }
                         }
                     }
                 }
@@ -1694,7 +1946,7 @@ document.addEventListener('DOMContentLoaded', () => {
             modalBody.innerHTML = '<div style="text-align: center; padding: 40px;"><div style="font-size: 48px; margin-bottom: 15px;">🔍</div><p style="font-size: 16px; color: #6b7280;">검색 중...</p></div>';
 
             try {
-                const response = await fetch('/api/barcode_search', {
+                const response = await fetch((typeof API_BASE !== 'undefined' ? API_BASE : '/') + 'api/barcode_search', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ barcode: barcode })
@@ -1897,43 +2149,24 @@ document.addEventListener('DOMContentLoaded', () => {
     // 모바일 메뉴 초기화
     initMobileMenu();
 
-    // 작업자 상세 토글 관련
+    // 작업자 상세 정보 로드 (항상 펼쳐진 상태)
     window.workerDetailCharts = {};
 
-    window.toggleWorkerDetail = async function(workerName, detailId, rowElement) {
+    window.loadWorkerDetail = async function(workerName, detailId, onDataLoaded) {
         const detailRow = document.getElementById(detailId);
-        if (!detailRow) return;
-
-        const toggleIcon = rowElement.querySelector('.toggle-icon');
-        const isVisible = detailRow.style.display !== 'none';
-
-        if (isVisible) {
-            // 접기
-            detailRow.style.display = 'none';
-            if (toggleIcon) toggleIcon.style.transform = 'rotate(0deg)';
-
-            // 차트 정리
-            if (window.workerDetailCharts[detailId]) {
-                if (window.workerDetailCharts[detailId].hourly) {
-                    window.workerDetailCharts[detailId].hourly.destroy();
-                }
-                if (window.workerDetailCharts[detailId].daily) {
-                    window.workerDetailCharts[detailId].daily.destroy();
-                }
-                delete window.workerDetailCharts[detailId];
-            }
+        if (!detailRow) {
+            if (onDataLoaded) onDataLoaded(null);
             return;
         }
 
-        // 펼치기
-        detailRow.style.display = 'table-row';
-        if (toggleIcon) toggleIcon.style.transform = 'rotate(90deg)';
-
         const contentDiv = detailRow.querySelector('.worker-detail-content');
-        contentDiv.innerHTML = '<div style="text-align: center; padding: 30px; color: #6b7280;"><div class="loading-spinner" style="display: inline-block; width: 30px; height: 30px; border: 3px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite;"></div><p style="margin-top: 10px;">데이터 로딩 중...</p></div>';
+        if (!contentDiv) {
+            if (onDataLoaded) onDataLoaded(null);
+            return;
+        }
 
         try {
-            const response = await fetch('/api/worker_hourly', {
+            const response = await fetch((typeof API_BASE !== 'undefined' ? API_BASE : '/') + 'api/worker_hourly', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1950,67 +2183,82 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (data.error) {
                 contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">' + data.error + '</div>';
+                if (onDataLoaded) onDataLoaded(null);
                 return;
             }
+
+            // 콜백으로 hourly_data 전달
+            if (onDataLoaded) onDataLoaded(data.hourly_data);
 
             const s = data.summary || {};
             const hourlyChartId = 'hourly-chart-' + detailId;
             const dailyChartId = 'daily-chart-' + detailId;
+            const isMobile = window.innerWidth <= 768;
 
-            // 상세 콘텐츠 렌더링
-            contentDiv.innerHTML =
-                '<div style="border-top: 2px solid #3b82f6;">' +
-                // 요약 통계
-                '<div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; padding: 15px; background: #f8fafc; border-bottom: 1px solid #e5e7eb;">' +
-                '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #1d4ed8;">' + (s.total_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">총 생산량</div></div>' +
-                '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #16a34a;">' + (s.avg_daily_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">일평균</div></div>' +
-                '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ca8a04;">' + (s.total_sessions || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">세션수</div></div>' +
-                '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #a855f7;">' + (s.first_pass_yield || 0) + '%</div><div style="font-size: 10px; color: #6b7280;">초도수율</div></div>' +
-                '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ea580c;">' + (s.avg_work_time || 0) + '초</div><div style="font-size: 10px; color: #6b7280;">평균작업시간</div></div>' +
-                '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #57534e;">' + (s.num_days || 0) + '일</div><div style="font-size: 10px; color: #6b7280;">작업일수</div></div>' +
-                '</div>' +
-                // 차트 영역
-                '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; padding: 15px;">' +
-                '<div style="background: white; border-radius: 6px; padding: 12px; border: 1px solid #e5e7eb;">' +
-                '<div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 8px;">시간대별 평균 생산량</div>' +
-                '<div style="height: 150px;"><canvas id="' + hourlyChartId + '"></canvas></div>' +
-                '</div>' +
-                '<div style="background: white; border-radius: 6px; padding: 12px; border: 1px solid #e5e7eb;">' +
-                '<div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 8px;">일별 생산량</div>' +
-                '<div style="height: 150px;"><canvas id="' + dailyChartId + '"></canvas></div>' +
-                '</div>' +
-                '</div>' +
-                '</div>';
+            // 초를 분:초 형식으로 변환
+            function formatWorkTime(seconds) {
+                if (!seconds || seconds <= 0) return '0:00';
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.round(seconds % 60);
+                return mins + ':' + (secs < 10 ? '0' : '') + secs;
+            }
+
+            // 상세 콘텐츠 렌더링 (모바일 반응형)
+            if (isMobile) {
+                // 모바일: 2열 통계 + 2개 차트 (세로 배치)
+                contentDiv.innerHTML =
+                    '<div style="border-top: 2px solid #3b82f6; padding: 12px;">' +
+                    // 요약 통계 (2열 x 2행)
+                    '<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px;">' +
+                    '<div style="background: #f0f9ff; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #1d4ed8;">' + (s.total_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">총 생산량</div></div>' +
+                    '<div style="background: #f0fdf4; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #16a34a;">' + (s.avg_daily_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">일평균</div></div>' +
+                    '<div style="background: #fefce8; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ca8a04;">' + (s.total_sessions || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">세션수</div></div>' +
+                    '<div style="background: #faf5ff; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #a855f7;">' + formatWorkTime(s.avg_work_time) + '</div><div style="font-size: 10px; color: #6b7280;">평균작업시간</div></div>' +
+                    '</div>' +
+                    // 차트 2개 (세로 배치)
+                    '<div style="display: flex; flex-direction: column; gap: 10px;">' +
+                    '<div style="background: white; border-radius: 8px; padding: 10px; border: 1px solid #e5e7eb;">' +
+                    '<div style="font-size: 11px; font-weight: 600; color: #374151; margin-bottom: 6px;">⏰ 실시간 생산량</div>' +
+                    '<div style="height: 100px;"><canvas id="' + hourlyChartId + '"></canvas></div>' +
+                    '</div>' +
+                    '<div style="background: white; border-radius: 8px; padding: 10px; border: 1px solid #e5e7eb;">' +
+                    '<div style="font-size: 11px; font-weight: 600; color: #374151; margin-bottom: 6px;">📊 일별 생산량</div>' +
+                    '<div style="height: 100px;"><canvas id="' + dailyChartId + '"></canvas></div>' +
+                    '</div>' +
+                    '</div>' +
+                    '</div>';
+            } else {
+                // 데스크탑: 6열 통계 + 2개 차트
+                contentDiv.innerHTML =
+                    '<div style="border-top: 2px solid #3b82f6;">' +
+                    // 요약 통계
+                    '<div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; padding: 15px; background: #f8fafc; border-bottom: 1px solid #e5e7eb;">' +
+                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #1d4ed8;">' + (s.total_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">총 생산량</div></div>' +
+                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #16a34a;">' + (s.avg_daily_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">일평균</div></div>' +
+                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ca8a04;">' + (s.total_sessions || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">세션수</div></div>' +
+                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #a855f7;">' + (s.first_pass_yield || 0) + '%</div><div style="font-size: 10px; color: #6b7280;">초도수율</div></div>' +
+                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ea580c;">' + formatWorkTime(s.avg_work_time) + '</div><div style="font-size: 10px; color: #6b7280;">평균작업시간</div></div>' +
+                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #57534e;">' + (s.total_num_days || 0) + '일</div><div style="font-size: 10px; color: #6b7280;">작업일수</div></div>' +
+                    '</div>' +
+                    // 차트 영역
+                    '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; padding: 15px;">' +
+                    '<div style="background: white; border-radius: 6px; padding: 12px; border: 1px solid #e5e7eb;">' +
+                    '<div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 8px;">실시간 생산량</div>' +
+                    '<div style="height: 150px;"><canvas id="' + hourlyChartId + '"></canvas></div>' +
+                    '</div>' +
+                    '<div style="background: white; border-radius: 6px; padding: 12px; border: 1px solid #e5e7eb;">' +
+                    '<div style="font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 8px;">일별 생산량</div>' +
+                    '<div style="height: 150px;"><canvas id="' + dailyChartId + '"></canvas></div>' +
+                    '</div>' +
+                    '</div>' +
+                    '</div>';
+            }
 
             // 차트 인스턴스 저장 객체 초기화
             window.workerDetailCharts[detailId] = {};
 
-            // 시간대별 차트
-            const hourlyCtx = document.getElementById(hourlyChartId);
-            if (hourlyCtx && data.hourly_data && data.hourly_data.values) {
-                window.workerDetailCharts[detailId].hourly = new Chart(hourlyCtx.getContext('2d'), {
-                    type: 'bar',
-                    data: {
-                        labels: data.hourly_data.labels,
-                        datasets: [{
-                            data: data.hourly_data.values,
-                            backgroundColor: 'rgba(59, 130, 246, 0.7)',
-                            borderColor: 'rgba(59, 130, 246, 1)',
-                            borderWidth: 1,
-                            borderRadius: 3
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
-                        scales: {
-                            y: { beginAtZero: true, ticks: { font: { size: 10 } } },
-                            x: { ticks: { font: { size: 9 }, maxRotation: 0 } }
-                        }
-                    }
-                });
-            }
+            // 시간대별 차트는 updateAllHourlyCharts()에서 전역 범위로 생성
+            // (여기서는 생성하지 않음 - 모든 작업자 로드 후 통일된 범위로 생성)
 
             // 일별 차트
             const dailyCtx = document.getElementById(dailyChartId);
@@ -2047,10 +2295,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('작업자 데이터 로딩 실패:', error);
             contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">데이터 로딩 실패: ' + error.message + '</div>';
+            if (onDataLoaded) onDataLoaded(null);
         }
     };
 
-    console.log('✅ 작업자 상세 토글 기능 초기화 완료');
+    console.log('✅ 작업자 상세 정보 로드 기능 초기화 완료');
 });
 
 console.log('✅ 향상된 버전 스크립트 로드 완료');

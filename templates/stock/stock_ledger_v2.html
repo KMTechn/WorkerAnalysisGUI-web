@@ -36,42 +36,62 @@
             text-size-adjust: 100%;
         }
 
-        /* 통합 네비게이션 */
+        /* 통합 네비게이션 - 모던 다크 */
         .top-nav {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             height: var(--nav-height);
-            background: #1a252f;
+            background: #18181b;
+            border-bottom: 1px solid #27272a;
             z-index: 1050;
             display: flex;
             align-items: center;
         }
 
-        .top-nav .container {
+        .top-nav-inner {
+            width: 100%;
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 0 1rem;
             display: flex;
             align-items: center;
         }
 
-        .top-nav a {
-            color: #adb5bd;
+        /* 로고 스타일 */
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            margin-right: 1rem;
+            text-decoration: none;
+        }
+        .logo-img {
+            height: 28px;
+            width: auto;
+            object-fit: contain;
+        }
+
+        .top-nav .nav-link {
+            color: #a1a1aa;
             text-decoration: none;
             padding: 0.5rem 1rem;
             font-size: 0.85rem;
-            transition: color 0.2s;
+            transition: all 0.2s;
+            border-radius: 6px;
         }
 
-        .top-nav a:hover { color: white; }
-        .top-nav a.active { color: #3498db; font-weight: 600; }
-        .top-nav .brand { margin-left: auto; color: #6c757d; font-size: 0.85rem; }
+        .top-nav .nav-link:hover { color: #fafafa; background: #27272a; }
+        .top-nav .nav-link.active { color: #60a5fa; font-weight: 600; }
+        .top-nav .nav-brand { margin-left: auto; color: #52525b; font-size: 0.85rem; }
 
-        /* 헤더 */
+        /* 헤더 - 모던 다크 그라데이션 */
         .page-header {
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            background: linear-gradient(135deg, #1e1e2e 0%, #2d2d3d 50%, #3d3d4d 100%);
             color: white;
-            padding: 1rem 0;
+            padding: 1.25rem 0;
             margin-bottom: 1.5rem;
+            border-bottom: 1px solid #404050;
         }
 
         .page-header h1 {
@@ -624,11 +644,10 @@
             margin: 0 auto;
             width: 100%;
             transform-origin: top center;
-            overflow-x: hidden;
+            overflow: visible;
         }
 
         .zoom-content {
-            min-height: calc(100vh - var(--nav-height));
             display: flex;
             flex-direction: column;
             padding: 0;
@@ -675,12 +694,20 @@
             height: auto !important;
         }
 
+        /* 탭 콘텐츠 하단 여백 */
+        .tab-content {
+            padding-bottom: 1.5rem;
+        }
+
         /* 푸터 */
         .site-footer {
-            margin-top: 3rem;
-            padding: 2rem 0;
+            margin-top: 1rem;
+            padding: 1.5rem 0;
             background: #f8f9fa;
             border-top: 1px solid #e9ecef;
+            clear: both;
+            position: relative;
+            z-index: 1;
         }
 
         .site-footer .footer-content {
@@ -702,22 +729,119 @@
 
         /* 모바일 반응형 */
         @media (max-width: 768px) {
-            .kpi-card .value { font-size: 1.25rem; }
-            .kpi-card .label { font-size: 0.75rem; }
+            /* 네비게이션 */
+            .top-nav { height: 44px; }
+            .top-nav-inner { padding: 0 0.5rem; }
+            .top-nav .nav-link {
+                padding: 0.35rem 0.6rem;
+                font-size: 0.75rem;
+            }
+            .top-nav .nav-brand {
+                display: none;
+            }
+            .logo-img { height: 22px; }
+            .nav-logo { margin-right: 0.5rem; }
 
+            /* 페이지 헤더 */
+            .page-header {
+                padding: 0.75rem 0;
+                margin-bottom: 1rem;
+            }
+            .page-header h1 {
+                font-size: 1rem;
+                margin-bottom: 0.25rem;
+            }
+            .page-header .container {
+                padding: 0 0.75rem;
+            }
+
+            /* 실시간 상태 */
+            .realtime-status {
+                font-size: 0.7rem;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+            .realtime-status > span {
+                white-space: nowrap;
+            }
+            .status-dot {
+                width: 6px;
+                height: 6px;
+            }
+
+            /* 네비게이션 높이에 맞춰 body padding 조정 */
+            body {
+                padding-top: 44px;
+            }
+
+            /* KPI 카드 */
+            .kpi-card .value { font-size: 1.1rem; }
+            .kpi-card .label { font-size: 0.7rem; }
+            .kpi-card { padding: 0.75rem; }
+
+            /* 모달 */
             .item-modal .stat-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
 
+            /* 날짜 선택 */
             .date-presets { gap: 0.25rem; }
-            .date-preset-btn { padding: 0.3rem 0.6rem; font-size: 0.7rem; }
+            .date-preset-btn { padding: 0.25rem 0.5rem; font-size: 0.65rem; }
 
-            .filter-card { padding: 1rem; }
+            /* 필터 카드 */
+            .filter-card { padding: 0.75rem; }
+
+            /* 탭 */
+            .nav-tabs {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .nav-tabs .nav-link {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.75rem;
+                white-space: nowrap;
+            }
+
+            /* 테이블 */
+            .table { font-size: 0.75rem; }
+            .table th, .table td { padding: 0.4rem 0.3rem; }
+
+            /* 모바일에서 테이블 컨테이너 스크롤 제거 (body 스크롤만 사용) */
+            .table-container {
+                max-height: none !important;
+                overflow-y: visible !important;
+            }
+
+            /* 트렌드 탭 레이아웃 개선 */
+            #trendTab .col-md-4,
+            #trendTab .col-md-8 {
+                width: 100%;
+            }
+
+            #trendTab .chart-container {
+                height: 200px !important;
+            }
+
+            /* 월별 상세 테이블 모바일 최적화 */
+            #trendTab .data-card {
+                margin-top: 1rem;
+            }
+
+            #trendTab .data-card .card-header {
+                padding: 0.5rem 0.75rem;
+            }
+
+            #trendTab .data-card .table th,
+            #trendTab .data-card .table td {
+                padding: 0.5rem 0.25rem;
+                font-size: 0.7rem;
+            }
         }
 
         @media (max-width: 576px) {
-            .page-header h1 { font-size: 1.2rem; }
-            .realtime-status { font-size: 0.75rem; }
+            .page-header h1 { font-size: 0.9rem; }
+            .realtime-status { font-size: 0.65rem; gap: 0.4rem; }
 
             .site-footer .footer-content {
                 flex-direction: column;
@@ -727,16 +851,29 @@
             .site-footer .separator {
                 display: none;
             }
+
+            /* 더 작은 화면용 추가 조정 */
+            .top-nav .nav-link {
+                padding: 0.3rem 0.5rem;
+                font-size: 0.7rem;
+            }
+            .kpi-card .value { font-size: 1rem; }
         }
     </style>
 </head>
 <body>
     <!-- 통합 네비게이션 -->
     <nav class="top-nav">
-        <div class="container">
-            <a href="/"><i class="bi bi-people me-1"></i>작업자 분석</a>
-            <a href="/stock/" class="active"><i class="bi bi-box-seam me-1"></i>재고 원장</a>
-            <span class="brand">KMTech 통합 대시보드</span>
+        <div class="top-nav-inner">
+            <a href="/" class="nav-logo">
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="KMTech" class="logo-img">
+            </a>
+            <a href="/" class="nav-link">👥 작업자 분석</a>
+            <a href="/stock/" class="nav-link active">📦 재고 원장</a>
+            {% if not demo_mode %}
+            <a href="/stock/demo" class="nav-link">🎬 데모</a>
+            {% endif %}
+            <span class="nav-brand">KMTech 통합 대시보드</span>
         </div>
     </nav>
 
@@ -757,8 +894,16 @@
     </header>
 
     <div class="container">
-        <!-- 빠른 날짜 선택 & 필터 -->
+        <!-- 빠른 날짜 선택 & 필터 (모바일에서 접기 가능) -->
         <div class="filter-card">
+            <!-- 모바일 필터 토글 버튼 -->
+            <div class="d-md-none mb-2">
+                <button class="btn btn-sm btn-outline-secondary w-100" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse" aria-expanded="false" aria-controls="filterCollapse" id="filterToggleBtn">
+                    <i class="bi bi-funnel me-1"></i>필터 열기 <i class="bi bi-chevron-down ms-1"></i>
+                </button>
+            </div>
+            <!-- 필터 내용 (모바일에서 접힘, 데스크탑에서는 항상 표시) -->
+            <div class="collapse d-md-block" id="filterCollapse">
             <div class="row">
                 <div class="col-lg-8">
                     <!-- 빠른 날짜 선택 -->
@@ -826,6 +971,7 @@
                     </div>
                 </div>
             </div>
+            </div><!-- /filterCollapse -->
         </div>
 
         <!-- KPI 카드 -->
@@ -1044,49 +1190,57 @@
             <!-- 트렌드 탭 -->
             <div class="tab-pane fade" id="trendTab">
                 <div class="row g-3">
-                    <div class="col-md-4">
+                    <!-- 좌측: 품목 선택 + 요약 -->
+                    <div class="col-lg-3 col-md-4">
                         <div class="filter-card">
                             <h6><i class="bi bi-search me-2"></i>품목 선택</h6>
                             <select id="trendItemSelect" class="form-select" onchange="loadItemTrend()">
                                 <option value="">품목을 선택하세요</option>
                             </select>
                             <div id="trendItemInfo" class="mt-3" style="display: none;">
-                                <div class="stat-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
-                                    <div class="stat-box text-center p-2 bg-light rounded">
-                                        <div class="value h5 mb-0" id="trendTotalIn">-</div>
-                                        <div class="label small text-muted">총 입고</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                                    <div class="text-center p-2 bg-light rounded">
+                                        <div class="h5 mb-0 text-success" id="trendTotalIn">-</div>
+                                        <div class="small text-muted">총 입고</div>
                                     </div>
-                                    <div class="stat-box text-center p-2 bg-light rounded">
-                                        <div class="value h5 mb-0" id="trendTotalOut">-</div>
-                                        <div class="label small text-muted">총 출고</div>
+                                    <div class="text-center p-2 bg-light rounded">
+                                        <div class="h5 mb-0 text-danger" id="trendTotalOut">-</div>
+                                        <div class="small text-muted">총 출고</div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-8">
-                        <div class="chart-card">
+                    <!-- 우측: 차트 + 테이블 -->
+                    <div class="col-lg-9 col-md-8">
+                        <!-- 차트 -->
+                        <div class="chart-card mb-3" style="height: auto;">
                             <h6><i class="bi bi-graph-up me-2"></i>월별 입출고 트렌드</h6>
-                            <div class="chart-container" style="height: 300px;">
+                            <div class="chart-container" style="height: 220px;">
                                 <canvas id="trendChart"></canvas>
                             </div>
                         </div>
-                        <div class="data-card mt-3">
-                            <div class="card-header">
-                                <span class="title">월별 상세</span>
+                        <!-- 월별 상세 테이블 (고정 높이 + 스크롤) -->
+                        <div class="card mb-5" style="overflow: hidden;">
+                            <div class="card-header bg-secondary text-white py-2">
+                                <i class="bi bi-table me-2"></i>월별 상세
                             </div>
-                            <div class="table-container">
-                                <table class="table table-sm mb-0">
-                                    <thead>
+                            <div class="card-body p-0" style="max-height: 450px; overflow-y: auto;">
+                                <table class="table table-sm table-hover table-striped mb-0">
+                                    <thead class="table-light" style="position: sticky; top: 0;">
                                         <tr>
-                                            <th>월</th>
+                                            <th class="ps-3">월</th>
                                             <th class="text-end">입고</th>
                                             <th class="text-end">출고</th>
                                             <th class="text-end">순변동</th>
-                                            <th class="text-end">거래건수</th>
+                                            <th class="text-end pe-3">거래건수</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="trendTableBody"></tbody>
+                                    <tbody id="trendTableBody">
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted py-3">품목을 선택하세요</td>
+                                        </tr>
+                                    </tbody>
                                 </table>
                             </div>
                         </div>
@@ -1169,6 +1323,18 @@
             initSocket();
             loadAllData();
             startAutoRefresh();
+
+            // 모바일 필터 토글 버튼 텍스트 업데이트
+            const filterCollapse = document.getElementById('filterCollapse');
+            const filterToggleBtn = document.getElementById('filterToggleBtn');
+            if (filterCollapse && filterToggleBtn) {
+                filterCollapse.addEventListener('show.bs.collapse', function() {
+                    filterToggleBtn.innerHTML = '<i class="bi bi-funnel-fill me-1"></i>필터 닫기 <i class="bi bi-chevron-up ms-1"></i>';
+                });
+                filterCollapse.addEventListener('hide.bs.collapse', function() {
+                    filterToggleBtn.innerHTML = '<i class="bi bi-funnel me-1"></i>필터 열기 <i class="bi bi-chevron-down ms-1"></i>';
+                });
+            }
         });
 
         // ========== Socket.IO ==========
@@ -1341,6 +1507,9 @@
                 updateCharts();
                 updateLastUpdate();
                 populateTrendSelect();
+
+                // 품목 검색 시 자동으로 트렌드 연동
+                autoSelectTrendItem(filters.itemSearch);
 
             } catch (error) {
                 console.error('데이터 로딩 실패:', error);
@@ -1749,6 +1918,26 @@
             });
         }
 
+        function autoSelectTrendItem(searchTerm) {
+            // 품목 검색어가 있고 결과가 1개인 경우 자동 선택
+            if (searchTerm && state.summaryData.length === 1) {
+                const select = document.getElementById('trendItemSelect');
+                select.value = state.summaryData[0].item_code;
+                loadItemTrend();
+            }
+            // 검색어가 있고 결과가 여러 개지만 정확히 일치하는 품목이 있는 경우
+            else if (searchTerm && state.summaryData.length > 0) {
+                const exactMatch = state.summaryData.find(
+                    item => item.item_code.toLowerCase() === searchTerm.toLowerCase()
+                );
+                if (exactMatch) {
+                    const select = document.getElementById('trendItemSelect');
+                    select.value = exactMatch.item_code;
+                    loadItemTrend();
+                }
+            }
+        }
+
         async function loadItemTrend() {
             const itemCode = document.getElementById('trendItemSelect').value;
             if (!itemCode) {
@@ -1810,11 +1999,11 @@
                 const net = d.in - d.out;
                 return `
                     <tr>
-                        <td>${month}</td>
-                        <td class="text-end qty-in">${d.in.toLocaleString()}</td>
-                        <td class="text-end qty-out">${d.out.toLocaleString()}</td>
-                        <td class="text-end ${net >= 0 ? 'qty-in' : 'qty-out'}">${net.toLocaleString()}</td>
-                        <td class="text-end">${d.count}</td>
+                        <td class="ps-3">${month}</td>
+                        <td class="text-end text-success fw-bold">${d.in.toLocaleString()}</td>
+                        <td class="text-end text-danger fw-bold">${d.out.toLocaleString()}</td>
+                        <td class="text-end fw-bold ${net >= 0 ? 'text-success' : 'text-danger'}">${net >= 0 ? '+' : ''}${net.toLocaleString()}</td>
+                        <td class="text-end pe-3">${d.count}</td>
                     </tr>
                 `;
             }).join('');

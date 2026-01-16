@@ -8,6 +8,7 @@ import random
 
 # 샘플 품목 데이터
 SAMPLE_ITEMS = [
+    {"code": "TEST-12M-001", "name": "12개월 테스트 품목"},  # 12개월 연속 데이터 테스트용
     {"code": "FP-LED-001", "name": "LED Driver IC 3.3V"},
     {"code": "FP-LED-002", "name": "LED Driver IC 5V"},
     {"code": "FP-PWR-001", "name": "Power Management IC"},
@@ -49,9 +50,59 @@ def generate_demo_ledger(from_date, to_date, count=100):
 
     # 품목별 현재 잔량 추적
     balances = {item["code"]: random.randint(100, 1000) for item in SAMPLE_ITEMS}
+    balances["TEST-12M-001"] = 5000  # 테스트 품목
+
+    # 테스트 품목: 12개월 연속 데이터 추가 (고정값)
+    # 현재 날짜 기준 최근 12개월
+    test_item = {"code": "TEST-12M-001", "name": "12개월 테스트 품목"}
+    test_in_qty = [350, 420, 380, 290, 510, 330, 470, 400, 360, 440, 390, 480]
+    test_out_qty = [180, 250, 200, 150, 280, 170, 220, 190, 160, 210, 175, 230]
+
+    today = datetime.now()
+    for month_offset in range(12):
+        # 현재 월에서 (11-month_offset)개월 전 = 최근 12개월 데이터
+        months_ago = 11 - month_offset
+        month_date = datetime(today.year, today.month, 15, 10, 0) - timedelta(days=months_ago * 30)
+        # 입고
+        data.append({
+            "date": month_date,
+            "item_code": test_item["code"],
+            "item_name": test_item["name"],
+            "base_item_code": test_item["code"],
+            "warehouse": "본사 창고 - KMTech",
+            "in_qty": test_in_qty[month_offset],
+            "out_qty": 0,
+            "balance_qty": 5000,
+            "valuation_rate": 15000,
+            "stock_value": 75000000,
+            "voucher_type": "Stock Entry",
+            "voucher_no": f"SE-2025-{10000 + month_offset:05d}",
+            "stock_entry_type": "Material Receipt",
+            "stock_entry_type_kr": "입고",
+        })
+        # 출고
+        data.append({
+            "date": month_date + timedelta(days=5),
+            "item_code": test_item["code"],
+            "item_name": test_item["name"],
+            "base_item_code": test_item["code"],
+            "warehouse": "본사 창고 - KMTech",
+            "in_qty": 0,
+            "out_qty": test_out_qty[month_offset],
+            "balance_qty": 5000,
+            "valuation_rate": 15000,
+            "stock_value": 75000000,
+            "voucher_type": "Stock Entry",
+            "voucher_no": f"SE-2025-{20000 + month_offset:05d}",
+            "stock_entry_type": "Material Issue",
+            "stock_entry_type_kr": "출고",
+        })
+
+    # 테스트 품목 제외한 샘플 목록 (랜덤 생성용)
+    sample_items_no_test = [item for item in SAMPLE_ITEMS if item["code"] != "TEST-12M-001"]
 
     for i in range(count):
-        item = random.choice(SAMPLE_ITEMS)
+        item = random.choice(sample_items_no_test)
         warehouse = random.choice(SAMPLE_WAREHOUSES)
         entry_type = random.choice(ENTRY_TYPES)
 
