@@ -578,7 +578,23 @@
         }
 
         .stock-card .qty.low { color: var(--warning-color); }
-        .stock-card .qty.critical { color: var(--danger-color); }
+        .stock-card .qty.critical { color: var(--danger-color); font-weight: 800; }
+
+        .stock-card.low-stock {
+            border-left: 4px solid var(--warning-color);
+            background: #fffbeb;
+        }
+
+        .stock-card.critical-stock {
+            border-left: 4px solid var(--danger-color);
+            background: #fef2f2;
+            animation: pulse-warning 2s infinite;
+        }
+
+        @keyframes pulse-warning {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
 
         /* 자동완성 드롭다운 */
         .autocomplete-dropdown {
@@ -1186,9 +1202,27 @@
                         <div class="data-card">
                             <div class="card-header">
                                 <span class="title"><i class="bi bi-box me-2"></i>현재 재고 현황</span>
-                                <span class="badge" id="stockCount">0건</span>
+                                <div>
+                                    <span class="badge me-2" id="stockCount">0건</span>
+                                    <button class="btn btn-sm btn-success" onclick="exportCurrentStock()">
+                                        <i class="bi bi-file-earmark-excel"></i>
+                                    </button>
+                                </div>
                             </div>
-                            <div class="p-3" id="currentStockList" style="max-height: 450px; overflow-y: auto;">
+                            <!-- 요약 정보 -->
+                            <div class="p-2 bg-light border-bottom">
+                                <div class="row text-center small">
+                                    <div class="col-6">
+                                        <div class="fw-bold text-primary" id="stockTotalQty">0</div>
+                                        <div class="text-muted">총 재고량</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="fw-bold text-danger" id="stockLowCount">0</div>
+                                        <div class="text-muted">부족 품목</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="p-3" id="currentStockList" style="max-height: 400px; overflow-y: auto;">
                                 <div class="text-center text-muted py-4">데이터 로딩 중...</div>
                             </div>
                         </div>
@@ -1196,8 +1230,20 @@
                     <!-- 우측: 창고별 품목 그래프 -->
                     <div class="col-md-8">
                         <div class="chart-card" style="height: 100%;">
-                            <h6><i class="bi bi-bar-chart-fill me-2"></i>창고별 품목 분포</h6>
-                            <div class="chart-container" style="height: 500px;">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h6 class="mb-0"><i class="bi bi-bar-chart-fill me-2"></i>창고별 품목 분포</h6>
+                                <div class="d-flex gap-2">
+                                    <select id="stockSortOrder" class="form-select form-select-sm" style="width: auto;" onchange="updateWarehouseItemChart()">
+                                        <option value="qty-desc">수량 많은순</option>
+                                        <option value="qty-asc">수량 적은순</option>
+                                        <option value="name-asc">이름순</option>
+                                    </select>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="loadCurrentStock()" title="새로고침">
+                                        <i class="bi bi-arrow-clockwise"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="chart-container" style="height: 480px;">
                                 <canvas id="warehouseItemChart"></canvas>
                             </div>
                         </div>
@@ -1731,6 +1777,12 @@
                 (item.item_name && item.item_name.toLowerCase().includes(searchTerm))
             );
 
+            // 요약 정보 업데이트
+            const totalQty = filtered.reduce((sum, item) => sum + (item.current_qty || 0), 0);
+            const lowCount = filtered.filter(item => item.current_qty < 100).length;
+            document.getElementById('stockTotalQty').textContent = totalQty.toLocaleString();
+            document.getElementById('stockLowCount').textContent = lowCount;
+
             if (filtered.length === 0) {
                 container.innerHTML = '<div class="text-center text-muted py-4">재고 데이터가 없습니다</div>';
                 return;
@@ -1738,9 +1790,10 @@
 
             container.innerHTML = filtered.map(item => {
                 const qtyClass = item.current_qty < 100 ? 'critical' : item.current_qty < 500 ? 'low' : '';
+                const cardClass = item.current_qty < 100 ? 'critical-stock' : item.current_qty < 500 ? 'low-stock' : '';
                 const displayCode = item.item_code.replace(/_UNPACK$/, '').replace(/_REPACK$/, '');
                 return `
-                    <div class="stock-card" onclick="showItemModal('${item.item_code}', '${item.item_name}')">
+                    <div class="stock-card ${cardClass}" onclick="showItemModal('${item.item_code}', '${item.item_name}')">
                         <div class="item-info">
                             <h6><code>${displayCode}</code></h6>
                             <small>${item.item_name || ''}</small>
@@ -1750,6 +1803,12 @@
                     </div>
                 `;
             }).join('');
+        }
+
+        function exportCurrentStock() {
+            const warehouse = document.getElementById('stockWarehouse')?.value || '';
+            const params = warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : '';
+            window.location.href = API_BASE + 'api/export-current-stock' + params;
         }
 
         function renderRecentFeed() {
@@ -1779,6 +1838,7 @@
 
         function filterCurrentStock() {
             renderCurrentStock();
+            updateWarehouseItemChart();
         }
 
         // ========== KPI 업데이트 ==========
@@ -1914,6 +1974,14 @@
             if (!ctx) return;
 
             const selectedWarehouse = document.getElementById('stockWarehouse')?.value || '';
+            const searchTerm = document.getElementById('stockItemSearch')?.value?.toLowerCase() || '';
+
+            // 검색어로 필터링된 데이터
+            const filteredData = state.currentStockData.filter(item =>
+                !searchTerm ||
+                item.item_code.toLowerCase().includes(searchTerm) ||
+                (item.item_name && item.item_name.toLowerCase().includes(searchTerm))
+            );
 
             if (state.charts.warehouseItem) state.charts.warehouseItem.destroy();
 
@@ -1921,7 +1989,7 @@
                 // 전체 창고: 창고별 전체 수량 (TEST 제외)
                 const warehouseTotal = {};
 
-                state.currentStockData.forEach(row => {
+                filteredData.forEach(row => {
                     const wh = row.warehouse || 'Unknown';
                     // 창고명에서 앞부분 추출 (예: "입고창고 - K" -> "입고창고")
                     const whName = wh.split(' - ')[0].trim();
@@ -1988,14 +2056,26 @@
             } else {
                 // 특정 창고 선택: 품목별 재고량
                 const itemQty = {};
-                state.currentStockData.forEach(row => {
+                filteredData.forEach(row => {
                     // _UNPACK, _REPACK 접미사 제거
                     const itemCode = (row.item_code || 'Unknown').replace(/_UNPACK$/, '').replace(/_REPACK$/, '');
                     itemQty[itemCode] = (itemQty[itemCode] || 0) + (row.current_qty || 0);
                 });
 
-                const items = Object.keys(itemQty);
-                const data = items.map(item => itemQty[item]);
+                // 정렬 옵션 적용
+                const sortOrder = document.getElementById('stockSortOrder')?.value || 'qty-desc';
+                let sortedItems = Object.entries(itemQty);
+
+                if (sortOrder === 'qty-desc') {
+                    sortedItems.sort((a, b) => b[1] - a[1]);
+                } else if (sortOrder === 'qty-asc') {
+                    sortedItems.sort((a, b) => a[1] - b[1]);
+                } else if (sortOrder === 'name-asc') {
+                    sortedItems.sort((a, b) => a[0].localeCompare(b[0]));
+                }
+
+                const items = sortedItems.map(([k]) => k);
+                const data = sortedItems.map(([, v]) => v);
 
                 const colors = [
                     '#3498db', '#27ae60', '#f39c12', '#e74c3c', '#9b59b6',

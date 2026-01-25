@@ -198,6 +198,43 @@ def api_items():
     return jsonify(items)
 
 
+@stock_bp.route('/api/export-current-stock')
+def api_export_current_stock():
+    """현재 재고 엑셀 내보내기"""
+    warehouse = request.args.get('warehouse', None)
+
+    data = get_current_stock(warehouse)
+
+    columns = {
+        'item_code': '품목코드',
+        'item_name': '품목명',
+        'warehouse': '창고',
+        'current_qty': '현재재고',
+        'valuation_rate': '단가',
+        'stock_value': '재고금액'
+    }
+
+    wh_name = warehouse.split(' - ')[0] if warehouse else '전체'
+    filename = f'현재재고_{wh_name}_{datetime.now().strftime("%Y%m%d")}.xlsx'
+
+    df = pd.DataFrame(data)
+    if not df.empty:
+        df = df[[col for col in columns.keys() if col in df.columns]]
+        df = df.rename(columns=columns)
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='현재재고')
+
+    output.seek(0)
+
+    return Response(
+        output.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{__import__('urllib.parse', fromlist=['quote']).quote(filename)}"}
+    )
+
+
 @stock_bp.route('/api/search-items')
 def api_search_items():
     """품목 검색 API (자동완성)"""
