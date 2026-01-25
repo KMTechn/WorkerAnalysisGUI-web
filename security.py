@@ -154,7 +154,7 @@ def is_authenticated() -> bool:
 
 
 # 인증 없이 접근 가능한 경로
-PUBLIC_PATHS = ['/login', '/static/']
+PUBLIC_PATHS = ['/login', '/static/', '/health']
 
 
 LOGIN_TEMPLATE = '''
