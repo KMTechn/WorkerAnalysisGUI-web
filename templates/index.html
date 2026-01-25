@@ -1,6 +1,8 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" dir="ltr">
 <head>
+    <meta name="description" content="KMTech 작업자 성과 분석 대시보드 - 이적실, 검사실, 포장실 작업 데이터 분석">
+    <meta name="theme-color" content="#18181b">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>성과 분석 대시보드</title>
@@ -12,34 +14,46 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-    <div class="loading-overlay" id="loading-overlay">
-        <div class="loading-spinner"></div>
+    <!-- 통합 상단 네비게이션 -->
+    <nav class="top-nav" role="navigation" aria-label="메인 네비게이션">
+        <div class="top-nav-inner">
+            <a href="/" class="nav-logo" aria-label="KMTech 홈으로 이동">
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="KMTech 로고" class="logo-img">
+            </a>
+            <a href="/" class="nav-link active" aria-current="page">👥 작업자 분석</a>
+            <a href="/stock/" class="nav-link">📦 재고 원장</a>
+            <span class="nav-brand" aria-hidden="true">KMTech 통합 대시보드</span>
+        </div>
+    </nav>
+
+    <div class="loading-overlay" id="loading-overlay" role="alert" aria-live="polite" aria-busy="true">
+        <div class="loading-spinner" aria-hidden="true"></div>
         <p id="loading-message">데이터 분석 중...</p>
         <p id="loading-submessage" style="font-size: 0.85rem; color: rgba(255,255,255,0.8); margin-top: 8px;">잠시만 기다려 주세요</p>
     </div>
 
     <!-- 모바일 햄버거 메뉴 버튼 -->
-    <button class="mobile-menu-btn" id="mobile-menu-btn">☰</button>
+    <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="메뉴 열기" aria-expanded="false" aria-controls="sidebar">☰</button>
 
     <!-- 사이드바 오버레이 (모바일) -->
-    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+    <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
 
     <div class="container">
         <!-- Sidebar -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar" role="complementary" aria-label="필터 및 설정">
             <header class="sidebar-header">
                 <h2>성과 분석 대시보드</h2>
-                <span id="app-version">v3.2.0-web</span>
+                <span id="app-version" aria-label="앱 버전">v3.2.0-web</span>
             </header>
 
-            <nav class="filters">
-                <div class="filter-group">
-                    <label class="filter-label">공정 선택</label>
-                    <div id="process-mode-radios">
-                        <label><input type="radio" name="process_mode" value="이적실" checked> 이적실 분석</label>
-                        <label><input type="radio" name="process_mode" value="검사실"> 검사실 분석</label>
-                        <label><input type="radio" name="process_mode" value="포장실"> 포장실 분석</label>
-                        <label><input type="radio" name="process_mode" value="전체 비교"> 전체 비교</label>
+            <nav class="filters" aria-label="데이터 필터">
+                <div class="filter-group" role="group" aria-labelledby="process-label">
+                    <label class="filter-label" id="process-label">공정 선택</label>
+                    <div id="process-mode-radios" role="radiogroup" aria-labelledby="process-label">
+                        <label><input type="radio" name="process_mode" value="이적실" checked aria-checked="true"> 이적실 분석</label>
+                        <label><input type="radio" name="process_mode" value="검사실" aria-checked="false"> 검사실 분석</label>
+                        <label><input type="radio" name="process_mode" value="포장실" aria-checked="false"> 포장실 분석</label>
+                        <label><input type="radio" name="process_mode" value="전체 비교" aria-checked="false"> 전체 비교</label>
                     </div>
                 </div>
 
@@ -48,39 +62,39 @@
                     <p id="log-folder-path" class="log-folder-display">C:\Sync</p>
                 </div>
 
-                <div class="filter-group">
-                    <label class="filter-label">바코드 검색</label>
+                <div class="filter-group" role="search">
+                    <label class="filter-label" for="barcode-input">바코드 검색</label>
                     <div class="barcode-search">
-                        <input type="text" id="barcode-input" placeholder="바코드 입력" class="barcode-input-field">
-                        <button id="search-barcode-btn" class="btn btn-primary">검색</button>
+                        <input type="text" id="barcode-input" placeholder="바코드 입력" class="barcode-input-field" aria-label="바코드 검색어 입력">
+                        <button id="search-barcode-btn" class="btn btn-primary" aria-label="바코드 검색">검색</button>
                     </div>
                 </div>
             </nav>
         </aside>
 
         <!-- Main Content -->
-        <main class="main-content">
+        <main class="main-content" role="main" aria-label="대시보드 메인 콘텐츠">
             <header class="main-header">
                 <h1 id="main-title">대시보드</h1>
             </header>
 
-            <div class="tabs">
+            <div class="tabs" role="tablist" aria-label="분석 탭">
                 <!-- 탭 버튼들은 JS로 동적 생성 -->
             </div>
 
-            <div class="tab-content">
+            <div class="tab-content" role="tabpanel" aria-live="polite">
                 <!-- 탭 콘텐츠들은 JS로 동적 생성 -->
             </div>
         </main>
     </div>
 
     <!-- 바코드 검색 모달 -->
-    <div id="barcode-modal" class="barcode-modal" style="display: none;">
-        <div class="barcode-modal-overlay" onclick="closeBarcodeModal()"></div>
+    <div id="barcode-modal" class="barcode-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="barcode-modal-title">
+        <div class="barcode-modal-overlay" onclick="closeBarcodeModal()" aria-hidden="true"></div>
         <div class="barcode-modal-content">
             <div class="barcode-modal-header">
-                <h2>🔍 바코드 검색 결과</h2>
-                <button class="barcode-modal-close" onclick="closeBarcodeModal()">&times;</button>
+                <h2 id="barcode-modal-title">🔍 바코드 검색 결과</h2>
+                <button class="barcode-modal-close" onclick="closeBarcodeModal()" aria-label="닫기">&times;</button>
             </div>
             <div class="barcode-modal-body" id="barcode-modal-body">
                 <!-- 검색 결과가 여기에 표시됩니다 -->
@@ -89,12 +103,12 @@
     </div>
 
     <!-- 작업자 생산량 그래프 모달 -->
-    <div id="worker-chart-modal" class="barcode-modal" style="display: none;">
-        <div class="barcode-modal-overlay" onclick="closeWorkerChartModal()"></div>
+    <div id="worker-chart-modal" class="barcode-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="worker-chart-title">
+        <div class="barcode-modal-overlay" onclick="closeWorkerChartModal()" aria-hidden="true"></div>
         <div class="barcode-modal-content" style="max-width: 900px; width: 95%;">
             <div class="barcode-modal-header">
                 <h2 id="worker-chart-title">📊 작업자 시간당 생산량</h2>
-                <button class="barcode-modal-close" onclick="closeWorkerChartModal()">&times;</button>
+                <button class="barcode-modal-close" onclick="closeWorkerChartModal()" aria-label="닫기">&times;</button>
             </div>
             <div class="barcode-modal-body" id="worker-chart-body" style="padding: 20px;">
                 <!-- 작업자 통계 요약 -->

@@ -1,11 +1,19 @@
 // 향상된 버전 - 차트 + 기간 필터 추가
 console.log('🚀 향상된 버전 로드');
 
+// XSS 방지용 HTML 이스케이프 함수
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+
 window.onerror = function(message, source, lineno, colno, error) {
     console.error('전역 에러:', message, error);
     const errorDiv = document.createElement('div');
     errorDiv.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#dc3545;color:white;padding:15px 30px;border-radius:8px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
-    errorDiv.innerHTML = '<strong>⚠️ 에러:</strong> ' + message + ' (라인: ' + lineno + ')';
+    errorDiv.innerHTML = '<strong>⚠️ 에러:</strong> ' + escapeHtml(message) + ' (라인: ' + escapeHtml(lineno) + ')';
     document.body.appendChild(errorDiv);
     setTimeout(() => errorDiv.remove(), 5000);
     return false;
@@ -72,7 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.tabContentContainer.innerHTML = `
                 <div style="padding: 40px; text-align: center;">
                     <h2 style="color: red;">❌ 데이터 로딩 실패</h2>
-                    <p>${error.message}</p>
+                    <p>${escapeHtml(error.message)}</p>
                     <button onclick="location.reload()" style="padding: 10px 20px; margin-top: 20px; cursor: pointer;">새로고침</button>
                 </div>
             `;
@@ -95,7 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // 공정 선택 드롭다운 추가 (모바일에서 햄버거 메뉴 대신 사용)
         const processSelect = document.createElement('select');
         processSelect.id = 'process-select';
-        processSelect.style.cssText = 'padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; background: #f8fafc; color: #374151; cursor: pointer; margin-right: 8px; font-weight: 500;';
+        processSelect.style.cssText = 'padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; background: #f8fafc; color: #374151; cursor: pointer; margin-right: 8px; font-weight: 500; max-width: 100px; flex-shrink: 0;';
         processSelect.innerHTML = `
             <option value="이적실" ${state.process_mode === '이적실' ? 'selected' : ''}>이적실</option>
             <option value="검사실" ${state.process_mode === '검사실' ? 'selected' : ''}>검사실</option>
@@ -136,7 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 기간 필터 추가 (드롭다운 방식)
         const filterDiv = document.createElement('div');
-        filterDiv.style.cssText = 'display: inline-flex; gap: 8px; margin-left: auto; align-items: center;';
+        filterDiv.style.cssText = 'display: inline-flex; gap: 8px; margin-left: auto; align-items: center; flex-shrink: 0;';
 
         // 현재 선택된 기간 계산
         const currentDays = Math.ceil((new Date(state.end_date) - new Date(state.start_date)) / (1000 * 60 * 60 * 24));
@@ -229,11 +237,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.start_date = startDate;
                 state.end_date = endDate;
 
-                // 모든 프리셋 버튼 비활성화
-                filterDiv.querySelectorAll('.btn-preset').forEach(function(b) {
-                    b.classList.remove('active');
-                });
-                document.getElementById('btn-custom-date').classList.add('active');
+                // 드롭다운에 custom 선택 유지
+                const periodSelect = document.getElementById('period-select');
+                if (periodSelect) {
+                    periodSelect.value = 'custom';
+                }
 
                 // 패널 숨기기
                 document.getElementById('custom-date-panel').style.display = 'none';
@@ -245,8 +253,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // 패널 외부 클릭 시 닫기
             document.addEventListener('click', function(e) {
                 const panel = document.getElementById('custom-date-panel');
-                const customBtn = document.getElementById('btn-custom-date');
-                if (panel && customBtn && !panel.contains(e.target) && e.target !== customBtn) {
+                const periodSelect = document.getElementById('period-select');
+                if (panel && !panel.contains(e.target) && e.target !== periodSelect) {
                     panel.style.display = 'none';
                 }
             });
@@ -335,16 +343,33 @@ document.addEventListener('DOMContentLoaded', () => {
         const avgTrayTime = kpis.avg_tray_time || 0;
         const fpy = kpis.avg_fpy || 0;
 
-        // 모바일 반응형 스타일
-        const isMobile = window.innerWidth <= 768;
-        const containerPadding = isMobile ? '16px' : '30px';
-        const kpiGridStyle = isMobile
-            ? 'display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px;'
-            : 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;';
-        const kpiPadding = isMobile ? '14px' : '20px';
-        const kpiFontSize = isMobile ? '22px' : '28px';
-        const chartPadding = isMobile ? '16px' : '25px';
-        const chartHeight = isMobile ? '180px' : '300px';
+        // 반응형 스타일 (PC, 태블릿, 모바일)
+        const screenWidth = window.innerWidth;
+        const isMobile = screenWidth <= 768;
+        const isTablet = screenWidth > 768 && screenWidth <= 1024;
+        const isDesktop = screenWidth > 1024;
+
+        // 컨테이너 패딩
+        const containerPadding = isMobile ? '16px' : isTablet ? '20px' : '30px';
+
+        // KPI 그리드 스타일 (3개 카드)
+        let kpiGridStyle;
+        if (isMobile) {
+            kpiGridStyle = 'display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 20px;';
+        } else if (isTablet) {
+            kpiGridStyle = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px;';
+        } else {
+            kpiGridStyle = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 28px;';
+        }
+
+        // KPI 카드 스타일
+        const kpiPadding = isMobile ? '16px' : isTablet ? '20px' : '24px';
+        const kpiFontSize = isMobile ? '24px' : isTablet ? '28px' : '32px';
+        const kpiLabelSize = isMobile ? '12px' : isTablet ? '13px' : '14px';
+
+        // 차트 스타일
+        const chartPadding = isMobile ? '16px' : isTablet ? '20px' : '25px';
+        const chartHeight = isMobile ? '180px' : isTablet ? '260px' : '320px';
 
         container.innerHTML =
             '<div style="padding: ' + containerPadding + ';">' +
@@ -378,38 +403,47 @@ document.addEventListener('DOMContentLoaded', () => {
                 '</div>'
             ) +
 
-            // 핵심 생산량 메트릭 (2x2 on mobile)
+            // 핵심 생산량 메트릭 (모던 미니멀 디자인)
             '<div style="' + kpiGridStyle + '">' +
 
-            // 총 생산량
-            '<div style="background: white; border-left: 4px solid #2563eb; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">📦 총 생산량' + (state.process_mode === '포장실' ? ' (추정)' : '') + '</div>' +
-            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + totalPcs.toLocaleString() + ' <span style="font-size: 12px; color: #2563eb;">PCS</span></div>' +
+            // 총 생산량 카드
+            '<div style="background: #fff; padding: ' + kpiPadding + '; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; cursor: help;" title="선택한 기간 동안 생산된 총 제품 수량 (단위: PCS)">' +
+            '<div style="display: flex; justify-content: space-between; align-items: flex-start;">' +
+            '<div>' +
+            '<div style="font-size: ' + kpiLabelSize + '; color: #8b8b8b; margin-bottom: 8px; font-weight: 500;">총 생산량' + (state.process_mode === '포장실' ? ' (추정)' : '') + '</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: 700; color: #1a1a1a; line-height: 1;">' + totalPcs.toLocaleString() + ' <span style="font-size: ' + (isMobile ? '14px' : '16px') + '; color: #8b8b8b; font-weight: 500;">PCS</span></div>' +
             '</div>' +
+            '<div style="width: ' + (isMobile ? '40px' : '48px') + '; height: ' + (isMobile ? '40px' : '48px') + '; background: #f0f7ff; border-radius: 10px; display: flex; align-items: center; justify-content: center;">' +
+            '<svg width="' + (isMobile ? '20' : '24') + '" height="' + (isMobile ? '20' : '24') + '" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>' +
+            '</div></div></div>' +
 
-            // 총 트레이 수
-            '<div style="background: white; border-left: 4px solid #7c3aed; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">📋 총 트레이</div>' +
-            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + totalTrays.toLocaleString() + ' <span style="font-size: 12px; color: #7c3aed;">개</span></div>' +
+            // 총 트레이 카드
+            '<div style="background: #fff; padding: ' + kpiPadding + '; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; cursor: help;" title="완료된 트레이(작업 세션) 수. 1트레이 = 1회 작업 완료">' +
+            '<div style="display: flex; justify-content: space-between; align-items: flex-start;">' +
+            '<div>' +
+            '<div style="font-size: ' + kpiLabelSize + '; color: #8b8b8b; margin-bottom: 8px; font-weight: 500;">총 트레이</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: 700; color: #1a1a1a; line-height: 1;">' + totalTrays.toLocaleString() + ' <span style="font-size: ' + (isMobile ? '14px' : '16px') + '; color: #8b8b8b; font-weight: 500;">개</span></div>' +
             '</div>' +
+            '<div style="width: ' + (isMobile ? '40px' : '48px') + '; height: ' + (isMobile ? '40px' : '48px') + '; background: #fef3f2; border-radius: 10px; display: flex; align-items: center; justify-content: center;">' +
+            '<svg width="' + (isMobile ? '20' : '24') + '" height="' + (isMobile ? '20' : '24') + '" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>' +
+            '</div></div></div>' +
 
-            // 평균 작업 시간
-            '<div style="background: white; border-left: 4px solid #059669; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">⏱️ 평균 시간</div>' +
-            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + Math.round(avgTrayTime) + ' <span style="font-size: 12px; color: #059669;">초</span></div>' +
+            // 평균 작업 시간 카드
+            '<div style="background: #fff; padding: ' + kpiPadding + '; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; cursor: help;" title="트레이당 평균 작업 소요 시간 (단위: 초). 첫 스캔부터 마지막 스캔까지의 시간">' +
+            '<div style="display: flex; justify-content: space-between; align-items: flex-start;">' +
+            '<div>' +
+            '<div style="font-size: ' + kpiLabelSize + '; color: #8b8b8b; margin-bottom: 8px; font-weight: 500;">평균 시간</div>' +
+            '<div style="font-size: ' + kpiFontSize + '; font-weight: 700; color: #1a1a1a; line-height: 1;">' + Math.round(avgTrayTime) + ' <span style="font-size: ' + (isMobile ? '14px' : '16px') + '; color: #8b8b8b; font-weight: 500;">초</span></div>' +
             '</div>' +
-
-            // FPY (품질)
-            '<div style="background: white; border-left: 4px solid #dc2626; padding: ' + kpiPadding + '; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">' +
-            '<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">✅ 품질 (FPY)</div>' +
-            '<div style="font-size: ' + kpiFontSize + '; font-weight: bold; color: #111827;">' + (fpy * 100).toFixed(1) + '<span style="font-size: 12px; color: #dc2626;">%</span></div>' +
-            '</div>' +
+            '<div style="width: ' + (isMobile ? '40px' : '48px') + '; height: ' + (isMobile ? '40px' : '48px') + '; background: #f0fdf4; border-radius: 10px; display: flex; align-items: center; justify-content: center;">' +
+            '<svg width="' + (isMobile ? '20' : '24') + '" height="' + (isMobile ? '20' : '24') + '" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+            '</div></div></div>' +
 
             '</div>' +
 
             // 생산 추이 차트
-            '<div style="background: white; padding: ' + chartPadding + '; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: ' + (isMobile ? '16px' : '20px') + ';">' +
-            '<h3 style="margin: 0 0 ' + (isMobile ? '10px' : '15px') + ' 0; color: #333; font-size: ' + (isMobile ? '15px' : '16px') + ';">📈 생산 추이</h3>' +
+            '<div style="background: white; padding: ' + chartPadding + '; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: ' + (isMobile ? '16px' : isTablet ? '18px' : '24px') + ';">' +
+            '<h3 style="margin: 0 0 ' + (isMobile ? '10px' : isTablet ? '12px' : '16px') + ' 0; color: #333; font-size: ' + (isMobile ? '15px' : isTablet ? '16px' : '18px') + '; font-weight: 600;">📈 생산 추이</h3>' +
             '<div style="height: ' + chartHeight + ';"><canvas id="productionTrendChart"></canvas></div>' +
             '</div>' +
 
@@ -492,7 +526,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 cardItems +
                 '</div>';
         } else {
-            // 데스크탑: 테이블 레이아웃
+            // 데스크탑/태블릿: 테이블 레이아웃
+            const isTablet = window.innerWidth <= 1024 && window.innerWidth > 768;
+            const cellPadding = isTablet ? '10px 10px' : '12px 14px';
+            const headerFontSize = isTablet ? '12px' : '13px';
+            const dataFontSize = isTablet ? '13px' : '14px';
+            const barHeight = isTablet ? '16px' : '20px';
+
             let tableRows = '';
             sortedWorkers.forEach(function(w, index) {
                 const pcs = w.total_pcs_completed || 0;
@@ -506,15 +546,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 tableRows +=
                     '<tr style="border-bottom: 1px solid #f3f4f6;">' +
-                    '<td style="padding: 10px 8px; text-align: center; font-weight: bold; color: #6b7280;">' + (medal || (index + 1)) + '</td>' +
-                    '<td style="padding: 10px 8px; font-weight: 600; color: #374151;">' + (w.worker || 'N/A') + '</td>' +
-                    '<td style="padding: 10px 8px; width: 40%;">' +
-                    '<div style="background: #f3f4f6; border-radius: 4px; height: 18px; overflow: hidden;">' +
+                    '<td style="padding: ' + cellPadding + '; text-align: center; font-weight: bold; color: #6b7280; font-size: ' + dataFontSize + ';">' + (medal || (index + 1)) + '</td>' +
+                    '<td style="padding: ' + cellPadding + '; font-weight: 600; color: #374151; font-size: ' + dataFontSize + ';">' + (w.worker || 'N/A') + '</td>' +
+                    '<td style="padding: ' + cellPadding + '; width: 35%; min-width: 150px;">' +
+                    '<div style="background: #f3f4f6; border-radius: 4px; height: ' + barHeight + '; overflow: hidden;">' +
                     '<div style="width: ' + percentage + '%; background: ' + barColor + '; height: 100%; border-radius: 4px;"></div>' +
                     '</div>' +
                     '</td>' +
-                    '<td style="padding: 10px 8px; text-align: right; font-weight: bold;">' + pcs.toLocaleString() + '</td>' +
-                    '<td style="padding: 10px 8px; text-align: right; color: ' + diffColor + '; font-size: 13px;">' + diffText + '</td>' +
+                    '<td style="padding: ' + cellPadding + '; text-align: right; font-weight: bold; font-size: ' + dataFontSize + '; white-space: nowrap;">' + pcs.toLocaleString() + ' PCS</td>' +
+                    '<td style="padding: ' + cellPadding + '; text-align: right; color: ' + diffColor + '; font-size: ' + headerFontSize + '; white-space: nowrap;">' + diffText + '</td>' +
                     '</tr>' +
                     '<tr id="' + detailId + '">' +
                     '<td colspan="5" style="padding: 0; background: #f8fafc;">' +
@@ -527,20 +567,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
             container.innerHTML =
                 '<div style="background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px;">' +
-                '<div style="padding: 15px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">' +
-                '<h3 style="margin: 0; font-size: 16px; color: #374151;">🏆 작업자별 생산량</h3>' +
-                '<span style="font-size: 13px; color: #6b7280;">평균 ' + Math.round(avgPcs).toLocaleString() + ' PCS</span>' +
+                '<div style="padding: 16px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">' +
+                '<h3 style="margin: 0; font-size: ' + (isTablet ? '15px' : '17px') + '; color: #374151; font-weight: 600;">🏆 작업자별 생산량</h3>' +
+                '<span style="font-size: ' + headerFontSize + '; color: #6b7280; background: #f3f4f6; padding: 4px 12px; border-radius: 12px;">평균 ' + Math.round(avgPcs).toLocaleString() + ' PCS</span>' +
                 '</div>' +
-                '<table style="width: 100%; border-collapse: collapse;">' +
+                '<div style="overflow-x: auto;">' +
+                '<table style="width: 100%; border-collapse: collapse; min-width: 500px;">' +
                 '<thead><tr style="background: #f9fafb;">' +
-                '<th style="padding: 10px 8px; text-align: center; width: 40px; font-size: 12px; color: #6b7280;">순위</th>' +
-                '<th style="padding: 10px 8px; text-align: left; min-width: 70px; font-size: 12px; color: #6b7280;">작업자</th>' +
-                '<th style="padding: 10px 8px; text-align: left; min-width: 120px; font-size: 12px; color: #6b7280;">생산량</th>' +
-                '<th style="padding: 10px 8px; text-align: right; width: 80px; font-size: 12px; color: #6b7280;">PCS</th>' +
-                '<th style="padding: 10px 8px; text-align: right; width: 60px; font-size: 12px; color: #6b7280;">평균대비</th>' +
+                '<th style="padding: ' + cellPadding + '; text-align: center; width: 60px; font-size: ' + headerFontSize + '; color: #6b7280; font-weight: 500;">순위</th>' +
+                '<th style="padding: ' + cellPadding + '; text-align: left; min-width: 80px; font-size: ' + headerFontSize + '; color: #6b7280; font-weight: 500;">작업자</th>' +
+                '<th style="padding: ' + cellPadding + '; text-align: left; min-width: 150px; font-size: ' + headerFontSize + '; color: #6b7280; font-weight: 500;">생산량 비율</th>' +
+                '<th style="padding: ' + cellPadding + '; text-align: right; min-width: 100px; font-size: ' + headerFontSize + '; color: #6b7280; font-weight: 500;">생산량</th>' +
+                '<th style="padding: ' + cellPadding + '; text-align: right; min-width: 80px; font-size: ' + headerFontSize + '; color: #6b7280; font-weight: 500;">평균대비</th>' +
                 '</tr></thead>' +
                 '<tbody>' + tableRows + '</tbody>' +
                 '</table>' +
+                '</div>' +
                 '</div>';
         }
 
@@ -559,7 +601,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(function() {
                     loadWorkerDetail(workerName, detailId, function(hourlyData) {
                         // 항상 detailId 저장 (데이터 없어도)
+                        console.log('📥 [' + detailId + '] 받은 hourlyData:', hourlyData);
                         window.workerHourlyDataStore[detailId] = hourlyData || { labels: [], values: [] };
+                        console.log('📥 [' + detailId + '] 저장된 데이터:', JSON.stringify(window.workerHourlyDataStore[detailId]).substring(0, 150));
 
                         // 시간 범위 업데이트 (7시 이전이나 20시 이후 작업 있으면 확장)
                         if (hourlyData && hourlyData.values && hourlyData.labels) {
@@ -596,9 +640,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateAllHourlyCharts() {
         const range = window.globalHourRange;
         console.log('🔄 차트 재렌더링 시작, 범위:', range.min + '시 ~', range.max + '시');
+        console.log('📦 저장된 데이터 키:', Object.keys(window.workerHourlyDataStore));
 
         Object.keys(window.workerHourlyDataStore).forEach(function(detailId) {
             const hourlyData = window.workerHourlyDataStore[detailId] || { labels: [], values: [] };
+            console.log('📊 [' + detailId + '] hourlyData:', JSON.stringify(hourlyData).substring(0, 200));
 
             const hourlyChartId = 'hourly-chart-' + detailId;
             const hourlyCtx = document.getElementById(hourlyChartId);
@@ -622,12 +668,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const hourValueMap = {};
             const labels = hourlyData.labels || [];
             const values = hourlyData.values || [];
+            console.log('📊 [' + detailId + '] labels 수:', labels.length, ', values 수:', values.length);
             for (let i = 0; i < labels.length; i++) {
                 const hourMatch = String(labels[i]).match(/(\d+)/);
                 if (hourMatch) {
                     hourValueMap[parseInt(hourMatch[1])] = values[i] || 0;
                 }
             }
+            console.log('📊 [' + detailId + '] hourValueMap:', JSON.stringify(hourValueMap));
 
             // 전역 범위로 라벨/값 생성 (7시~20시 기본)
             const rangeLabels = [];
@@ -637,7 +685,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 rangeValues.push(hourValueMap[h] || 0);
             }
 
-            console.log('📊 차트 생성:', detailId, '라벨:', rangeLabels.length + '개');
+            console.log('📊 차트 생성:', detailId, '라벨:', rangeLabels, '값:', rangeValues);
 
             // 새 차트 생성
             try {
@@ -1150,7 +1198,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             labels = Object.keys(hourlyData).map(function(h) { return h + '시'; });
             values = Object.values(hourlyData);
-            chartTitle = '시간별 생산 세션 수';
+            chartTitle = '시간별 파렛트 수';
         } else if (daysDiff <= 31) {
             // 2-31일: 일별 차트
             aggregationType = 'daily';
@@ -1162,7 +1210,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const sortedDates = Object.keys(dailyData).sort();
             labels = sortedDates;
             values = sortedDates.map(function(date) { return dailyData[date]; });
-            chartTitle = '일별 생산 세션 수 (' + daysDiff + '일)';
+            chartTitle = '일별 파렛트 수 (' + daysDiff + '일)';
         } else if (daysDiff <= 91) {
             // 32-91일: 주별 차트
             aggregationType = 'weekly';
@@ -1178,7 +1226,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const sortedWeeks = Object.keys(weeklyData).sort();
             labels = sortedWeeks;
             values = sortedWeeks.map(function(week) { return weeklyData[week]; });
-            chartTitle = '주별 생산 세션 수 (' + Math.ceil(daysDiff / 7) + '주)';
+            chartTitle = '주별 파렛트 수 (' + Math.ceil(daysDiff / 7) + '주)';
         } else {
             // 92일 이상: 월별 차트
             aggregationType = 'monthly';
@@ -1192,7 +1240,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const sortedMonths = Object.keys(monthlyData).sort();
             labels = sortedMonths;
             values = sortedMonths.map(function(month) { return monthlyData[month]; });
-            chartTitle = '월별 생산 세션 수 (' + Math.ceil(daysDiff / 30) + '개월)';
+            chartTitle = '월별 파렛트 수 (' + Math.ceil(daysDiff / 30) + '개월)';
         }
 
         console.log('📊 차트 타입:', aggregationType, '| 데이터 포인트:', labels.length);
@@ -1211,7 +1259,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     data: {
                         labels: labels,
                         datasets: [{
-                            label: '일별 세션 수',
+                            label: '파렛트 수',
                             data: values,
                             backgroundColor: 'rgba(54, 162, 235, 0.6)',
                             borderColor: 'rgba(54, 162, 235, 1)',
@@ -1231,7 +1279,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         scales: {
                             y: {
                                 beginAtZero: true,
-                                title: { display: true, text: '세션 수' }
+                                title: { display: true, text: '파렛트 수' }
                             },
                             x: {
                                 title: { display: true, text: '날짜' }
@@ -1262,7 +1310,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 '<td style="padding: 10px; text-align: right;"><strong>' + (w.total_pcs_completed || 0).toLocaleString() + '</strong></td>' +
                 '<td style="padding: 10px; text-align: right;">' + formatSeconds(w.avg_work_time || 0) + '</td>' +
                 '<td style="padding: 10px; text-align: right;">' + (w.session_count || 0) + '</td>' +
-                '<td style="padding: 10px; text-align: right;">' + ((w.first_pass_yield || 0) * 100).toFixed(1) + '%</td>' +
                 '</tr>';
         }).join('');
 
@@ -1274,10 +1321,9 @@ document.addEventListener('DOMContentLoaded', () => {
             '<thead><tr style="background: #007bff; color: white;">' +
             '<th style="padding: 12px; text-align: left;">순위</th>' +
             '<th style="padding: 12px; text-align: left;">작업자</th>' +
-            '<th style="padding: 12px; text-align: right;">완료 PCS</th>' +
-            '<th style="padding: 12px; text-align: right;">평균시간</th>' +
-            '<th style="padding: 12px; text-align: right;">세션 수</th>' +
-            '<th style="padding: 12px; text-align: right;">FPY</th>' +
+            '<th style="padding: 12px; text-align: right; cursor: help;" title="총 생산 수량 (단위: PCS)">완료 PCS</th>' +
+            '<th style="padding: 12px; text-align: right; cursor: help;" title="트레이당 평균 작업 시간 (분:초)">평균시간</th>' +
+            '<th style="padding: 12px; text-align: right; cursor: help;" title="완료한 트레이(작업 세션) 수">트레이 수</th>' +
             '</tr></thead>' +
             '<tbody>' + workerRows + '</tbody>' +
             '</table>' +
@@ -1317,7 +1363,7 @@ document.addEventListener('DOMContentLoaded', () => {
             '<tbody>' + sessionRows + '</tbody>' +
             '</table>' +
             '</div>' +
-            (sessions.length > 100 ? '<p style="margin-top: 15px; color: #666;">총 ' + sessions.length + '개 세션 중 100개 표시</p>' : '') +
+            (sessions.length > 100 ? '<p style="margin-top: 15px; color: #666;">총 ' + sessions.length + '개 파렛트 중 100개 표시</p>' : '') +
             '</div>';
     }
 
@@ -1430,127 +1476,142 @@ document.addEventListener('DOMContentLoaded', () => {
         html += '<span style="font-size: 14px; color: #6b7280;">' + state.process_mode + '</span>';
         html += '</div>';
 
-        // 상단 KPI 카드 (다른 탭과 동일한 스타일)
-        html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px;">';
+        // 상단 KPI 카드 (모던 미니멀 스타일)
+        html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px;">';
 
         // 전체 트레이
-        html += '<div style="background: white; border-left: 6px solid #2563eb; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">';
-        html += '<div style="font-size: 14px; color: #6b7280; font-weight: 500; margin-bottom: 10px;">📋 전체 트레이</div>';
-        html += '<div style="font-size: 36px; font-weight: bold; color: #111827; margin-bottom: 5px;">' + totalTrays.toLocaleString() + '</div>';
-        html += '<div style="font-size: 13px; color: #2563eb; font-weight: 600;">개 처리</div>';
+        html += '<div style="background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0;">';
+        html += '<div style="display: flex; justify-content: space-between; align-items: flex-start;">';
+        html += '<div>';
+        html += '<div style="font-size: 13px; color: #8b8b8b; margin-bottom: 8px; font-weight: 500;">전체 트레이</div>';
+        html += '<div style="font-size: 28px; font-weight: 700; color: #1a1a1a; line-height: 1;">' + totalTrays.toLocaleString() + ' <span style="font-size: 14px; color: #8b8b8b; font-weight: 500;">개</span></div>';
         html += '</div>';
+        html += '<div style="width: 44px; height: 44px; background: #f0f7ff; border-radius: 10px; display: flex; align-items: center; justify-content: center;">';
+        html += '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>';
+        html += '</div></div></div>';
 
         // 전체 생산량
-        html += '<div style="background: white; border-left: 6px solid #10b981; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">';
-        html += '<div style="font-size: 14px; color: #6b7280; font-weight: 500; margin-bottom: 10px;">📦 전체 생산량</div>';
-        html += '<div style="font-size: 36px; font-weight: bold; color: #111827; margin-bottom: 5px;">' + totalPcs.toLocaleString() + '</div>';
-        html += '<div style="font-size: 13px; color: #10b981; font-weight: 600;">PCS 완료</div>';
+        html += '<div style="background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0;">';
+        html += '<div style="display: flex; justify-content: space-between; align-items: flex-start;">';
+        html += '<div>';
+        html += '<div style="font-size: 13px; color: #8b8b8b; margin-bottom: 8px; font-weight: 500;">전체 생산량</div>';
+        html += '<div style="font-size: 28px; font-weight: 700; color: #1a1a1a; line-height: 1;">' + totalPcs.toLocaleString() + ' <span style="font-size: 14px; color: #8b8b8b; font-weight: 500;">PCS</span></div>';
         html += '</div>';
+        html += '<div style="width: 44px; height: 44px; background: #f0fdf4; border-radius: 10px; display: flex; align-items: center; justify-content: center;">';
+        html += '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>';
+        html += '</div></div></div>';
 
         // 이적 대기
         const transferStandby = period.transfer_standby_trays || 0;
-        const transferStandbyColor = transferStandby > 0 ? '#ef4444' : '#10b981';
-        html += '<div style="background: white; border-left: 6px solid ' + transferStandbyColor + '; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">';
-        html += '<div style="font-size: 14px; color: #6b7280; font-weight: 500; margin-bottom: 10px;">⏳ 이적 대기</div>';
-        html += '<div style="font-size: 36px; font-weight: bold; color: ' + transferStandbyColor + '; margin-bottom: 5px;">' + transferStandby + '</div>';
-        html += '<div style="font-size: 13px; color: ' + transferStandbyColor + '; font-weight: 600;">트레이 대기중</div>';
+        const transferStandbyBg = transferStandby > 0 ? '#fef2f2' : '#f0fdf4';
+        const transferStandbyStroke = transferStandby > 0 ? '#ef4444' : '#22c55e';
+        html += '<div style="background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0;">';
+        html += '<div style="display: flex; justify-content: space-between; align-items: flex-start;">';
+        html += '<div>';
+        html += '<div style="font-size: 13px; color: #8b8b8b; margin-bottom: 8px; font-weight: 500;">이적 대기</div>';
+        html += '<div style="font-size: 28px; font-weight: 700; color: ' + transferStandbyStroke + '; line-height: 1;">' + transferStandby + ' <span style="font-size: 14px; color: #8b8b8b; font-weight: 500;">트레이</span></div>';
         html += '</div>';
+        html += '<div style="width: 44px; height: 44px; background: ' + transferStandbyBg + '; border-radius: 10px; display: flex; align-items: center; justify-content: center;">';
+        html += '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="' + transferStandbyStroke + '" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+        html += '</div></div></div>';
 
         // 포장 대기
         const packagingStandby = period.packaging_standby_trays || 0;
-        const packagingStandbyColor = packagingStandby > 0 ? '#ef4444' : '#10b981';
-        html += '<div style="background: white; border-left: 6px solid ' + packagingStandbyColor + '; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">';
-        html += '<div style="font-size: 14px; color: #6b7280; font-weight: 500; margin-bottom: 10px;">⏳ 포장 대기</div>';
-        html += '<div style="font-size: 36px; font-weight: bold; color: ' + packagingStandbyColor + '; margin-bottom: 5px;">' + packagingStandby + '</div>';
-        html += '<div style="font-size: 13px; color: ' + packagingStandbyColor + '; font-weight: 600;">트레이 대기중</div>';
+        const packagingStandbyBg = packagingStandby > 0 ? '#fef2f2' : '#f0fdf4';
+        const packagingStandbyStroke = packagingStandby > 0 ? '#ef4444' : '#22c55e';
+        html += '<div style="background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0;">';
+        html += '<div style="display: flex; justify-content: space-between; align-items: flex-start;">';
+        html += '<div>';
+        html += '<div style="font-size: 13px; color: #8b8b8b; margin-bottom: 8px; font-weight: 500;">포장 대기</div>';
+        html += '<div style="font-size: 28px; font-weight: 700; color: ' + packagingStandbyStroke + '; line-height: 1;">' + packagingStandby + ' <span style="font-size: 14px; color: #8b8b8b; font-weight: 500;">트레이</span></div>';
+        html += '</div>';
+        html += '<div style="width: 44px; height: 44px; background: ' + packagingStandbyBg + '; border-radius: 10px; display: flex; align-items: center; justify-content: center;">';
+        html += '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="' + packagingStandbyStroke + '" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+        html += '</div></div></div>';
+
         html += '</div>';
 
-        html += '</div>';
+        // 공정별 현황 카드 (모던 스타일)
+        html += '<div style="background: white; padding: 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; margin-bottom: 25px;">';
+        html += '<h3 style="margin: 0 0 20px 0; font-size: 16px; font-weight: 600; color: #1a1a1a;">공정별 생산 현황</h3>';
 
-        // 공정별 현황 카드
-        html += '<div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 25px;">';
-        html += '<h3 style="margin: 0 0 25px 0; font-size: 18px; font-weight: 700; color: #111827;">🏭 공정별 생산 현황</h3>';
-
-        html += '<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">';
+        html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">';
 
         // 검사실 카드
-        html += '<div style="background: #f8fafc; border-radius: 12px; padding: 25px; border: 1px solid #e2e8f0;">';
-        html += '<div style="display: flex; align-items: center; margin-bottom: 20px;">';
-        html += '<div style="width: 48px; height: 48px; background: #3b82f6; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">';
-        html += '<span style="font-size: 24px;">🔍</span>';
+        html += '<div style="background: #fff; border-radius: 12px; padding: 20px; border: 1px solid #e5e7eb;">';
+        html += '<div style="display: flex; align-items: center; margin-bottom: 16px;">';
+        html += '<div style="width: 40px; height: 40px; background: #eff6ff; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-right: 12px;">';
+        html += '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>';
         html += '</div>';
         html += '<div>';
-        html += '<div style="font-size: 18px; font-weight: 700; color: #111827;">검사실</div>';
-        html += '<div style="font-size: 13px; color: #6b7280;">STAGE 01</div>';
+        html += '<div style="font-size: 15px; font-weight: 600; color: #1a1a1a;">검사실</div>';
+        html += '<div style="font-size: 12px; color: #8b8b8b;">STAGE 01</div>';
         html += '</div>';
         html += '</div>';
-        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">';
-        html += '<div style="text-align: center; background: white; padding: 15px; border-radius: 8px;">';
-        html += '<div style="font-size: 11px; color: #6b7280; margin-bottom: 5px;">트레이</div>';
-        html += '<div style="font-size: 28px; font-weight: 700; color: #3b82f6;">' + (period.inspection?.total_trays || 0).toLocaleString() + '</div>';
+        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">';
+        html += '<div style="background: #f9fafb; padding: 14px; border-radius: 8px;">';
+        html += '<div style="font-size: 11px; color: #8b8b8b; margin-bottom: 4px;">트레이</div>';
+        html += '<div style="font-size: 22px; font-weight: 700; color: #3b82f6;">' + (period.inspection?.total_trays || 0).toLocaleString() + '</div>';
         html += '</div>';
-        html += '<div style="text-align: center; background: white; padding: 15px; border-radius: 8px;">';
-        html += '<div style="font-size: 11px; color: #6b7280; margin-bottom: 5px;">PCS</div>';
-        html += '<div style="font-size: 28px; font-weight: 700; color: #3b82f6;">' + (period.inspection?.total_pcs_completed || 0).toLocaleString() + '</div>';
+        html += '<div style="background: #f9fafb; padding: 14px; border-radius: 8px;">';
+        html += '<div style="font-size: 11px; color: #8b8b8b; margin-bottom: 4px;">PCS</div>';
+        html += '<div style="font-size: 22px; font-weight: 700; color: #3b82f6;">' + (period.inspection?.total_pcs_completed || 0).toLocaleString() + '</div>';
         html += '</div>';
         html += '</div>';
-        html += '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-size: 13px; color: #6b7280;">';
-        html += '<span>평균: ' + (period.inspection?.avg_tray_time?.toFixed(0) || 0) + '초</span>';
-        html += '<span>FPY: ' + (period.inspection?.avg_fpy ? (period.inspection.avg_fpy * 100).toFixed(1) : 0) + '%</span>';
+        html += '<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 13px; color: #8b8b8b;">';
+        html += '평균 작업시간: <span style="color: #1a1a1a; font-weight: 500;">' + (period.inspection?.avg_tray_time?.toFixed(0) || 0) + '초</span>';
         html += '</div>';
         html += '</div>';
 
         // 이적실 카드
-        html += '<div style="background: #f8fafc; border-radius: 12px; padding: 25px; border: 1px solid #e2e8f0;">';
-        html += '<div style="display: flex; align-items: center; margin-bottom: 20px;">';
-        html += '<div style="width: 48px; height: 48px; background: #8b5cf6; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">';
-        html += '<span style="font-size: 24px;">📦</span>';
+        html += '<div style="background: #fff; border-radius: 12px; padding: 20px; border: 1px solid #e5e7eb;">';
+        html += '<div style="display: flex; align-items: center; margin-bottom: 16px;">';
+        html += '<div style="width: 40px; height: 40px; background: #f5f3ff; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-right: 12px;">';
+        html += '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>';
         html += '</div>';
         html += '<div>';
-        html += '<div style="font-size: 18px; font-weight: 700; color: #111827;">이적실</div>';
-        html += '<div style="font-size: 13px; color: #6b7280;">STAGE 02</div>';
+        html += '<div style="font-size: 15px; font-weight: 600; color: #1a1a1a;">이적실</div>';
+        html += '<div style="font-size: 12px; color: #8b8b8b;">STAGE 02</div>';
         html += '</div>';
         html += '</div>';
-        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">';
-        html += '<div style="text-align: center; background: white; padding: 15px; border-radius: 8px;">';
-        html += '<div style="font-size: 11px; color: #6b7280; margin-bottom: 5px;">트레이</div>';
-        html += '<div style="font-size: 28px; font-weight: 700; color: #8b5cf6;">' + (period.transfer?.total_trays || 0).toLocaleString() + '</div>';
+        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">';
+        html += '<div style="background: #f9fafb; padding: 14px; border-radius: 8px;">';
+        html += '<div style="font-size: 11px; color: #8b8b8b; margin-bottom: 4px;">트레이</div>';
+        html += '<div style="font-size: 22px; font-weight: 700; color: #8b5cf6;">' + (period.transfer?.total_trays || 0).toLocaleString() + '</div>';
         html += '</div>';
-        html += '<div style="text-align: center; background: white; padding: 15px; border-radius: 8px;">';
-        html += '<div style="font-size: 11px; color: #6b7280; margin-bottom: 5px;">PCS</div>';
-        html += '<div style="font-size: 28px; font-weight: 700; color: #8b5cf6;">' + (period.transfer?.total_pcs_completed || 0).toLocaleString() + '</div>';
+        html += '<div style="background: #f9fafb; padding: 14px; border-radius: 8px;">';
+        html += '<div style="font-size: 11px; color: #8b8b8b; margin-bottom: 4px;">PCS</div>';
+        html += '<div style="font-size: 22px; font-weight: 700; color: #8b5cf6;">' + (period.transfer?.total_pcs_completed || 0).toLocaleString() + '</div>';
         html += '</div>';
         html += '</div>';
-        html += '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-size: 13px; color: #6b7280;">';
-        html += '<span>평균: ' + (period.transfer?.avg_tray_time?.toFixed(0) || 0) + '초</span>';
-        html += '<span>FPY: ' + (period.transfer?.avg_fpy ? (period.transfer.avg_fpy * 100).toFixed(1) : 0) + '%</span>';
+        html += '<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 13px; color: #8b8b8b;">';
+        html += '평균 작업시간: <span style="color: #1a1a1a; font-weight: 500;">' + (period.transfer?.avg_tray_time?.toFixed(0) || 0) + '초</span>';
         html += '</div>';
         html += '</div>';
 
         // 포장실 카드
-        html += '<div style="background: #f8fafc; border-radius: 12px; padding: 25px; border: 1px solid #e2e8f0;">';
-        html += '<div style="display: flex; align-items: center; margin-bottom: 20px;">';
-        html += '<div style="width: 48px; height: 48px; background: #06b6d4; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">';
-        html += '<span style="font-size: 24px;">🎁</span>';
+        html += '<div style="background: #fff; border-radius: 12px; padding: 20px; border: 1px solid #e5e7eb;">';
+        html += '<div style="display: flex; align-items: center; margin-bottom: 16px;">';
+        html += '<div style="width: 40px; height: 40px; background: #ecfeff; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-right: 12px;">';
+        html += '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2"><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6"></path><path d="M12 2v10"></path><path d="m8 6 4-4 4 4"></path></svg>';
         html += '</div>';
         html += '<div>';
-        html += '<div style="font-size: 18px; font-weight: 700; color: #111827;">포장실</div>';
-        html += '<div style="font-size: 13px; color: #6b7280;">STAGE 03</div>';
+        html += '<div style="font-size: 15px; font-weight: 600; color: #1a1a1a;">포장실</div>';
+        html += '<div style="font-size: 12px; color: #8b8b8b;">STAGE 03</div>';
         html += '</div>';
         html += '</div>';
-        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">';
-        html += '<div style="text-align: center; background: white; padding: 15px; border-radius: 8px;">';
-        html += '<div style="font-size: 11px; color: #6b7280; margin-bottom: 5px;">트레이</div>';
-        html += '<div style="font-size: 28px; font-weight: 700; color: #06b6d4;">' + (period.packaging?.total_trays || 0).toLocaleString() + '</div>';
+        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">';
+        html += '<div style="background: #f9fafb; padding: 14px; border-radius: 8px;">';
+        html += '<div style="font-size: 11px; color: #8b8b8b; margin-bottom: 4px;">트레이</div>';
+        html += '<div style="font-size: 22px; font-weight: 700; color: #06b6d4;">' + (period.packaging?.total_trays || 0).toLocaleString() + '</div>';
         html += '</div>';
-        html += '<div style="text-align: center; background: white; padding: 15px; border-radius: 8px;">';
-        html += '<div style="font-size: 11px; color: #6b7280; margin-bottom: 5px;">PCS <span style="color: #f59e0b; font-size: 10px;">(추정)</span></div>';
-        html += '<div style="font-size: 28px; font-weight: 700; color: #06b6d4;">' + (period.packaging?.total_pcs_completed || 0).toLocaleString() + '</div>';
+        html += '<div style="background: #f9fafb; padding: 14px; border-radius: 8px;">';
+        html += '<div style="font-size: 11px; color: #8b8b8b; margin-bottom: 4px;">PCS <span style="color: #f59e0b; font-size: 10px;">(추정)</span></div>';
+        html += '<div style="font-size: 22px; font-weight: 700; color: #06b6d4;">' + (period.packaging?.total_pcs_completed || 0).toLocaleString() + '</div>';
         html += '</div>';
         html += '</div>';
-        html += '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-size: 13px; color: #6b7280;">';
-        html += '<span>평균: ' + (period.packaging?.avg_tray_time?.toFixed(0) || 0) + '초</span>';
-        html += '<span>FPY: ' + (period.packaging?.avg_fpy ? (period.packaging.avg_fpy * 100).toFixed(1) : 0) + '%</span>';
+        html += '<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 13px; color: #8b8b8b;">';
+        html += '평균 작업시간: <span style="color: #1a1a1a; font-weight: 500;">' + (period.packaging?.avg_tray_time?.toFixed(0) || 0) + '초</span>';
         html += '</div>';
         html += '</div>';
 
@@ -1575,11 +1636,11 @@ document.addEventListener('DOMContentLoaded', () => {
         html += '<div style="display: flex; gap: 15px;">';
         html += '<div style="flex: 1; text-align: center; background: #f8fafc; padding: 20px; border-radius: 8px;">';
         html += '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">트레이</div>';
-        html += '<div style="font-size: 32px; font-weight: 700; color: ' + transferStandbyColor + ';">' + transferStandby + '</div>';
+        html += '<div style="font-size: 32px; font-weight: 700; color: ' + transferStandbyStroke + ';">' + transferStandby + '</div>';
         html += '</div>';
         html += '<div style="flex: 1; text-align: center; background: #f8fafc; padding: 20px; border-radius: 8px;">';
         html += '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">PCS</div>';
-        html += '<div style="font-size: 32px; font-weight: 700; color: ' + transferStandbyColor + ';">' + transferStandbyPcs.toLocaleString() + '</div>';
+        html += '<div style="font-size: 32px; font-weight: 700; color: ' + transferStandbyStroke + ';">' + transferStandbyPcs.toLocaleString() + '</div>';
         html += '</div>';
         html += '</div>';
         html += '</div>';
@@ -1599,11 +1660,11 @@ document.addEventListener('DOMContentLoaded', () => {
         html += '<div style="display: flex; gap: 15px;">';
         html += '<div style="flex: 1; text-align: center; background: #f8fafc; padding: 20px; border-radius: 8px;">';
         html += '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">트레이</div>';
-        html += '<div style="font-size: 32px; font-weight: 700; color: ' + packagingStandbyColor + ';">' + packagingStandby + '</div>';
+        html += '<div style="font-size: 32px; font-weight: 700; color: ' + packagingStandbyStroke + ';">' + packagingStandby + '</div>';
         html += '</div>';
         html += '<div style="flex: 1; text-align: center; background: #f8fafc; padding: 20px; border-radius: 8px;">';
         html += '<div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">PCS</div>';
-        html += '<div style="font-size: 32px; font-weight: 700; color: ' + packagingStandbyColor + ';">' + packagingStandbyPcs.toLocaleString() + '</div>';
+        html += '<div style="font-size: 32px; font-weight: 700; color: ' + packagingStandbyStroke + ';">' + packagingStandbyPcs.toLocaleString() + '</div>';
         html += '</div>';
         html += '</div>';
         html += '</div>';
@@ -1701,6 +1762,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderDetailsWithSearch(container, data) {
         const sessions = data.filtered_sessions_data || [];
 
+        // 반응형 스타일
+        const screenWidth = window.innerWidth;
+        const isMobile = screenWidth <= 768;
+        const isTablet = screenWidth > 768 && screenWidth <= 1024;
+
+        const containerPadding = isMobile ? '16px' : isTablet ? '20px' : '24px';
+        const fontSize = isMobile ? '13px' : '14px';
+        const inputPadding = isMobile ? '10px' : isTablet ? '10px' : '12px';
+        const gridMinWidth = isMobile ? '140px' : isTablet ? '160px' : '180px';
+
         // 상세 검색 상태
         if (!state.detailSearch) {
             state.detailSearch = {
@@ -1714,60 +1785,74 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         container.innerHTML =
-            '<div style="padding: 20px;">' +
+            '<div style="padding: ' + containerPadding + ';">' +
 
-            // 날짜 범위 + 다운로드 버튼 (한 줄)
-            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">' +
-            '<div style="display: flex; align-items: center; gap: 8px; color: #374151;">' +
-            '<span style="font-size: 16px;">📅</span>' +
-            '<span style="font-size: 15px; font-weight: 600;">' + state.start_date + ' ~ ' + state.end_date + '</span>' +
-            '<span style="color: #9ca3af; margin: 0 8px;">|</span>' +
-            '<span style="font-size: 14px; color: #6b7280;">' + state.process_mode + '</span>' +
-            '</div>' +
-            '<button onclick="downloadExcel(\'상세 데이터\')" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">' +
-            '📥 Excel 다운로드' +
-            '</button>' +
-            '</div>' +
+            // 날짜 범위 + 다운로드 버튼
+            (isMobile ?
+                '<div style="margin-bottom: 16px;">' +
+                '<div style="display: flex; align-items: center; gap: 6px; color: #374151; margin-bottom: 10px; flex-wrap: wrap;">' +
+                '<span style="font-size: 14px;">📅</span>' +
+                '<span style="font-size: 13px; font-weight: 600;">' + state.start_date + ' ~ ' + state.end_date + '</span>' +
+                '<span style="color: #9ca3af; margin: 0 4px;">|</span>' +
+                '<span style="font-size: 12px; color: #6b7280;">' + state.process_mode + '</span>' +
+                '</div>' +
+                '<button onclick="downloadExcel(\'상세 데이터\')" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">' +
+                '📥 Excel 다운로드' +
+                '</button>' +
+                '</div>'
+                :
+                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">' +
+                '<div style="display: flex; align-items: center; gap: 8px; color: #374151;">' +
+                '<span style="font-size: 16px;">📅</span>' +
+                '<span style="font-size: ' + (isTablet ? '14px' : '15px') + '; font-weight: 600;">' + state.start_date + ' ~ ' + state.end_date + '</span>' +
+                '<span style="color: #9ca3af; margin: 0 8px;">|</span>' +
+                '<span style="font-size: ' + (isTablet ? '13px' : '14px') + '; color: #6b7280;">' + state.process_mode + '</span>' +
+                '</div>' +
+                '<button onclick="downloadExcel(\'상세 데이터\')" style="padding: ' + (isTablet ? '8px 14px' : '10px 18px') + '; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: ' + (isTablet ? '12px' : '13px') + ';">' +
+                '📥 Excel 다운로드' +
+                '</button>' +
+                '</div>'
+            ) +
 
             // 검색 필터 섹션
-            '<div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px;">' +
-            '<h3 style="margin: 0 0 15px 0;">🔍 상세 검색</h3>' +
-            '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">' +
+            '<div style="background: white; padding: ' + (isMobile ? '16px' : isTablet ? '18px' : '24px') + '; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: ' + (isMobile ? '16px' : '20px') + ';">' +
+            '<h3 style="margin: 0 0 ' + (isMobile ? '12px' : '16px') + ' 0; font-size: ' + (isMobile ? '15px' : isTablet ? '16px' : '17px') + '; font-weight: 600;">🔍 상세 검색</h3>' +
+            '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(' + gridMinWidth + ', 1fr)); gap: ' + (isMobile ? '12px' : '16px') + ';">' +
 
             '<div>' +
-            '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">작업자</label>' +
-            '<input type="text" id="filter-worker" placeholder="작업자 이름" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">' +
-            '</div>' +
-
-            '<div>' +
-            '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">품목</label>' +
-            '<input type="text" id="filter-product" placeholder="품목명/코드" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">' +
+            '<label style="display: block; margin-bottom: 6px; font-size: ' + (isMobile ? '12px' : '13px') + '; color: #666; font-weight: 500;">작업자</label>' +
+            '<input type="text" id="filter-worker" placeholder="작업자 이름" style="width: 100%; padding: ' + inputPadding + '; border: 1px solid #ddd; border-radius: 6px; font-size: ' + fontSize + ';">' +
             '</div>' +
 
             '<div>' +
-            '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">시작 날짜</label>' +
-            '<input type="date" id="filter-date-from" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">' +
+            '<label style="display: block; margin-bottom: 6px; font-size: ' + (isMobile ? '12px' : '13px') + '; color: #666; font-weight: 500;">품목</label>' +
+            '<input type="text" id="filter-product" placeholder="품목명/코드" style="width: 100%; padding: ' + inputPadding + '; border: 1px solid #ddd; border-radius: 6px; font-size: ' + fontSize + ';">' +
             '</div>' +
 
             '<div>' +
-            '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">종료 날짜</label>' +
-            '<input type="date" id="filter-date-to" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">' +
+            '<label style="display: block; margin-bottom: 6px; font-size: ' + (isMobile ? '12px' : '13px') + '; color: #666; font-weight: 500;">시작 날짜</label>' +
+            '<input type="date" id="filter-date-from" style="width: 100%; padding: ' + inputPadding + '; border: 1px solid #ddd; border-radius: 6px; font-size: ' + fontSize + ';">' +
             '</div>' +
 
             '<div>' +
-            '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">최소 생산량</label>' +
-            '<input type="number" id="filter-min-pcs" placeholder="최소 PCS" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">' +
+            '<label style="display: block; margin-bottom: 6px; font-size: ' + (isMobile ? '12px' : '13px') + '; color: #666; font-weight: 500;">종료 날짜</label>' +
+            '<input type="date" id="filter-date-to" style="width: 100%; padding: ' + inputPadding + '; border: 1px solid #ddd; border-radius: 6px; font-size: ' + fontSize + ';">' +
             '</div>' +
 
             '<div>' +
-            '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">최대 생산량</label>' +
-            '<input type="number" id="filter-max-pcs" placeholder="최대 PCS" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">' +
+            '<label style="display: block; margin-bottom: 6px; font-size: ' + (isMobile ? '12px' : '13px') + '; color: #666; font-weight: 500;">최소 생산량</label>' +
+            '<input type="number" id="filter-min-pcs" placeholder="최소 PCS" style="width: 100%; padding: ' + inputPadding + '; border: 1px solid #ddd; border-radius: 6px; font-size: ' + fontSize + ';">' +
+            '</div>' +
+
+            '<div>' +
+            '<label style="display: block; margin-bottom: 6px; font-size: ' + (isMobile ? '12px' : '13px') + '; color: #666; font-weight: 500;">최대 생산량</label>' +
+            '<input type="number" id="filter-max-pcs" placeholder="최대 PCS" style="width: 100%; padding: ' + inputPadding + '; border: 1px solid #ddd; border-radius: 6px; font-size: ' + fontSize + ';">' +
             '</div>' +
 
             '</div>' +
 
-            '<div style="margin-top: 15px; display: flex; gap: 10px;">' +
-            '<button id="apply-filter-btn" style="padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">🔍 검색</button>' +
+            '<div style="margin-top: ' + (isMobile ? '12px' : '16px') + '; display: flex; gap: 10px; flex-wrap: wrap;">' +
+            '<button id="apply-filter-btn" style="padding: ' + (isMobile ? '10px 16px' : '12px 24px') + '; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: ' + (isMobile ? '13px' : '14px') + ';">🔍 검색</button>' +
             '<button id="reset-filter-btn" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer;">초기화</button>' +
             '</div>' +
 
@@ -1850,31 +1935,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            let tableHtml = '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">' +
+            // 반응형 스타일 결정
+            const isTablet = window.innerWidth <= 1024 && window.innerWidth > 768;
+            const isMobile = window.innerWidth <= 768;
+            const fontSize = isMobile ? '12px' : isTablet ? '13px' : '14px';
+            const cellPadding = isMobile ? '8px 6px' : isTablet ? '10px 8px' : '12px 14px';
+            const headerPadding = isMobile ? '10px 6px' : isTablet ? '12px 8px' : '14px 14px';
+
+            let tableHtml = '<div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">' +
+                '<table style="width: 100%; border-collapse: collapse; font-size: ' + fontSize + '; min-width: 700px;">' +
                 '<thead><tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">' +
-                '<th style="padding: 10px; text-align: left;">날짜</th>' +
-                '<th style="padding: 10px; text-align: left;">작업자</th>' +
-                '<th style="padding: 10px; text-align: left;">품목</th>' +
-                '<th style="padding: 10px; text-align: right;">생산량</th>' +
-                '<th style="padding: 10px; text-align: right;">작업시간</th>' +
-                '<th style="padding: 10px; text-align: right;">FPY</th>' +
-                '<th style="padding: 10px; text-align: center;">불량</th>' +
+                '<th style="padding: ' + headerPadding + '; text-align: left; min-width: 140px; white-space: nowrap;">날짜</th>' +
+                '<th style="padding: ' + headerPadding + '; text-align: left; min-width: 80px;">작업자</th>' +
+                '<th style="padding: ' + headerPadding + '; text-align: left; min-width: 150px;">품목</th>' +
+                '<th style="padding: ' + headerPadding + '; text-align: right; min-width: 90px;">생산량</th>' +
+                '<th style="padding: ' + headerPadding + '; text-align: right; min-width: 90px;">작업시간</th>' +
+                '<th style="padding: ' + headerPadding + '; text-align: right; min-width: 60px;">FPY</th>' +
+                '<th style="padding: ' + headerPadding + '; text-align: center; min-width: 50px;">불량</th>' +
                 '</tr></thead><tbody>';
 
             filteredSessions.forEach(function(s, index) {
                 const bgColor = index % 2 === 0 ? '#ffffff' : '#f8f9fa';
                 tableHtml += '<tr style="background: ' + bgColor + '; border-bottom: 1px solid #dee2e6;">' +
-                    '<td style="padding: 8px;">' + formatDateTime(s.start_time_dt || s.date) + '</td>' +
-                    '<td style="padding: 8px;">' + (s.worker || 'N/A') + '</td>' +
-                    '<td style="padding: 8px;">' + (s.item_display || s.item_name || 'N/A') + '</td>' +
-                    '<td style="padding: 8px; text-align: right; font-weight: bold;">' + (s.pcs_completed || 0) + ' PCS</td>' +
-                    '<td style="padding: 8px; text-align: right;">' + formatSeconds(s.work_time || 0) + '</td>' +
-                    '<td style="padding: 8px; text-align: right;">' + ((s.first_pass_yield || 0) * 100).toFixed(1) + '%</td>' +
-                    '<td style="padding: 8px; text-align: center;">' + (s.had_error ? '❌' : '✅') + '</td>' +
+                    '<td style="padding: ' + cellPadding + '; white-space: nowrap;">' + formatDateTime(s.start_time_dt || s.date) + '</td>' +
+                    '<td style="padding: ' + cellPadding + ';">' + (s.worker || 'N/A') + '</td>' +
+                    '<td style="padding: ' + cellPadding + ';">' + (s.item_display || s.item_name || 'N/A') + '</td>' +
+                    '<td style="padding: ' + cellPadding + '; text-align: right; font-weight: bold; white-space: nowrap;">' + (s.pcs_completed || 0) + ' PCS</td>' +
+                    '<td style="padding: ' + cellPadding + '; text-align: right; white-space: nowrap;">' + formatSeconds(s.work_time || 0) + '</td>' +
+                    '<td style="padding: ' + cellPadding + '; text-align: right;">' + ((s.first_pass_yield || 0) * 100).toFixed(1) + '%</td>' +
+                    '<td style="padding: ' + cellPadding + '; text-align: center;">' + (s.had_error ? '❌' : '✅') + '</td>' +
                     '</tr>';
             });
 
-            tableHtml += '</tbody></table>';
+            tableHtml += '</tbody></table></div>';
 
             if (filteredSessions.length >= 200) {
                 tableHtml += '<p style="text-align: center; color: #999; margin-top: 15px; font-size: 12px;">* 최대 200개까지만 표시됩니다</p>';
@@ -1933,6 +2026,14 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('⚠️ 바코드 검색 요소 없음');
             return;
         }
+
+        // 사이드바 바코드 입력에서 엔터키 지원
+        barcodeInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                searchBtn.click();
+            }
+        });
 
         searchBtn.onclick = async function() {
             const barcode = barcodeInput.value.trim();
@@ -2087,14 +2188,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     let html = '<div style="background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; border-top: 4px solid #dc2626;">';
                     html += '<div style="font-size: 48px; margin-bottom: 15px;">❌</div>';
                     html += '<h3 style="margin: 0 0 10px 0; color: #111827; font-size: 18px;">바코드를 찾을 수 없습니다</h3>';
-                    html += '<div style="font-size: 14px; color: #6b7280; margin-bottom: 15px;">' + result.barcode + '</div>';
+                    html += '<div style="font-size: 14px; color: #6b7280; margin-bottom: 15px;">' + escapeHtml(result.barcode) + '</div>';
                     html += '<div style="background: #fef2f2; color: #991b1b; padding: 12px; border-radius: 6px; font-size: 13px;">해당 바코드는 시스템에 등록되지 않았거나<br>데이터베이스에 기록이 없습니다.</div>';
                     html += '</div>';
                     modalBody.innerHTML = html;
                 }
 
             } catch (error) {
-                modalBody.innerHTML = '<div style="padding: 40px; text-align: center;"><div style="font-size: 48px; margin-bottom: 15px;">⚠️</div><div style="padding: 15px; background: #fef2f2; color: #991b1b; border-radius: 8px; font-size: 14px;">오류: ' + error.message + '</div></div>';
+                modalBody.innerHTML = '<div style="padding: 40px; text-align: center;"><div style="font-size: 48px; margin-bottom: 15px;">⚠️</div><div style="padding: 15px; background: #fef2f2; color: #991b1b; border-radius: 8px; font-size: 14px;">오류: ' + escapeHtml(error.message) + '</div></div>';
             }
         };
 
@@ -2180,20 +2281,25 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error('API 오류');
 
             const data = await response.json();
+            console.log('🔍 [' + detailId + '] API 응답:', {
+                worker: data.worker,
+                hourly_data_exists: !!data.hourly_data,
+                hourly_labels_count: data.hourly_data ? data.hourly_data.labels?.length : 0,
+                hourly_values_sample: data.hourly_data ? data.hourly_data.values?.slice(7, 15) : [],
+                summary: data.summary
+            });
 
             if (data.error) {
-                contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">' + data.error + '</div>';
+                contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">' + escapeHtml(data.error) + '</div>';
                 if (onDataLoaded) onDataLoaded(null);
                 return;
             }
-
-            // 콜백으로 hourly_data 전달
-            if (onDataLoaded) onDataLoaded(data.hourly_data);
 
             const s = data.summary || {};
             const hourlyChartId = 'hourly-chart-' + detailId;
             const dailyChartId = 'daily-chart-' + detailId;
             const isMobile = window.innerWidth <= 768;
+            const isTablet = window.innerWidth > 768 && window.innerWidth <= 1024;
 
             // 초를 분:초 형식으로 변환
             function formatWorkTime(seconds) {
@@ -2212,7 +2318,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     '<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px;">' +
                     '<div style="background: #f0f9ff; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #1d4ed8;">' + (s.total_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">총 생산량</div></div>' +
                     '<div style="background: #f0fdf4; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #16a34a;">' + (s.avg_daily_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">일평균</div></div>' +
-                    '<div style="background: #fefce8; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ca8a04;">' + (s.total_sessions || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">세션수</div></div>' +
+                    '<div style="background: #fefce8; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ca8a04;">' + (s.total_sessions || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">파렛트 수</div></div>' +
                     '<div style="background: #faf5ff; padding: 10px; border-radius: 8px; text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #a855f7;">' + formatWorkTime(s.avg_work_time) + '</div><div style="font-size: 10px; color: #6b7280;">평균작업시간</div></div>' +
                     '</div>' +
                     // 차트 2개 (세로 배치)
@@ -2228,15 +2334,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     '</div>' +
                     '</div>';
             } else {
-                // 데스크탑: 6열 통계 + 2개 차트
+                // 데스크탑: 5열 통계 + 2개 차트
                 contentDiv.innerHTML =
                     '<div style="border-top: 2px solid #3b82f6;">' +
                     // 요약 통계
-                    '<div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; padding: 15px; background: #f8fafc; border-bottom: 1px solid #e5e7eb;">' +
+                    '<div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 15px; background: #f8fafc; border-bottom: 1px solid #e5e7eb;">' +
                     '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #1d4ed8;">' + (s.total_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">총 생산량</div></div>' +
                     '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #16a34a;">' + (s.avg_daily_pcs || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">일평균</div></div>' +
-                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ca8a04;">' + (s.total_sessions || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">세션수</div></div>' +
-                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #a855f7;">' + (s.first_pass_yield || 0) + '%</div><div style="font-size: 10px; color: #6b7280;">초도수율</div></div>' +
+                    '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ca8a04;">' + (s.total_sessions || 0).toLocaleString() + '</div><div style="font-size: 10px; color: #6b7280;">파렛트 수</div></div>' +
                     '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #ea580c;">' + formatWorkTime(s.avg_work_time) + '</div><div style="font-size: 10px; color: #6b7280;">평균작업시간</div></div>' +
                     '<div style="text-align: center;"><div style="font-size: 18px; font-weight: bold; color: #57534e;">' + (s.total_num_days || 0) + '일</div><div style="font-size: 10px; color: #6b7280;">작업일수</div></div>' +
                     '</div>' +
@@ -2292,9 +2397,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
+            // DOM 업데이트 완료 후 콜백 호출 (hourly_data 전달)
+            if (onDataLoaded) {
+                console.log('📤 [' + detailId + '] 콜백 호출 (DOM 업데이트 완료 후)');
+                onDataLoaded(data.hourly_data);
+            }
+
         } catch (error) {
             console.error('작업자 데이터 로딩 실패:', error);
-            contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">데이터 로딩 실패: ' + error.message + '</div>';
+            contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">데이터 로딩 실패: ' + escapeHtml(error.message) + '</div>';
             if (onDataLoaded) onDataLoaded(null);
         }
     };

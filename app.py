@@ -22,6 +22,7 @@ from watchdog.events import FileSystemEventHandler
 
 from db_manager import DatabaseManager
 from analyzer_optimized import WorkerPerformance, OptimizedDataAnalyzer
+from config.app_config import config as app_config
 
 def convert_to_json_serializable(obj):
     """NumPy/Pandas 타입을 JSON 직렬화 가능한 타입으로 변환"""
@@ -60,6 +61,24 @@ def convert_to_json_serializable(obj):
     elif isinstance(obj, (list, tuple)):
         return [convert_to_json_serializable(item) for item in obj]
     return obj
+
+def normalize_worker_name(name):
+    """작업자명 정규화 - 특수문자 제거 및 알려진 오타/누락 수정"""
+    if not name or not isinstance(name, str):
+        return name
+
+    # 앞뒤 공백 및 특수문자 제거
+    normalized = name.strip()
+    normalized = re.sub(r'^[.\s\\\/\-_]+', '', normalized)  # 앞쪽 특수문자 제거
+    normalized = re.sub(r'[.\s\\\/\-_]+$', '', normalized)  # 뒤쪽 특수문자 제거
+
+    # 알려진 오타/누락 수정 (설정에서 로드)
+    corrections = app_config.worker.WORKER_CORRECTIONS
+
+    if normalized in corrections:
+        normalized = corrections[normalized]
+
+    return normalized
 
 def load_settings():
     try:
@@ -112,12 +131,13 @@ db = DatabaseManager(DB_PATH)
 # Data Analyzer
 analyzer = OptimizedDataAnalyzer()
 
-RADAR_METRICS_CONFIG = {
-    "포장실": { '세트완료시간': ('avg_work_time', False, 1.0), '첫스캔준비성': ('avg_latency', False, 1.0), '무결점달성률': ('first_pass_yield', True, 0.7), '세트당PCS': ('avg_pcs_per_tray', True, 1.0) },
-    "이적실": { '신속성': ('avg_work_time', False, 1.0), '준속성': ('avg_latency', False, 1.0), '초도수율': ('first_pass_yield', True, 0.7), '안정성': ('work_time_std', False, 1.0) },
-    "검사실": { '신속성': ('avg_work_time', False, 1.0), '준비성': ('avg_latency', False, 0.8), '무결점달성률': ('first_pass_yield', True, 1.2), '안정성': ('work_time_std', False, 0.7), '품질 정확도': ('defect_rate', False, 1.5) }
-}
+# 설정에서 레이더 메트릭 로드
+RADAR_METRICS_CONFIG = app_config.display.RADAR_METRICS.copy()
 RADAR_METRICS_CONFIG['전체 비교'] = RADAR_METRICS_CONFIG['이적실']
+
+# 설정에서 테스트 작업자 및 수정 매핑 로드
+TEST_WORKERS = app_config.worker.TEST_WORKERS
+WORKER_CORRECTIONS = app_config.worker.WORKER_CORRECTIONS
 
 # 파일 감시 핸들러
 class LogFileHandler(FileSystemEventHandler):
@@ -225,13 +245,19 @@ def index():
     return render_template('index.html', cache_buster=cache_buster)
 
 @app.route('/api/data', methods=['POST'])
+@validate_date_params('start_date', 'end_date')
 def get_analysis_data():
     print("\n[API] /api/data 요청 시작 (DB 기반)")
     try:
-        filters = request.json
+        filters = request.json or {}
         process_mode = filters.get('process_mode', '이적실')
         start_date = filters.get('start_date')
         end_date = filters.get('end_date')
+
+        # 유효한 공정 모드 확인
+        VALID_PROCESSES = ['이적실', '검사실', '포장실', '전체 비교']
+        if process_mode not in VALID_PROCESSES:
+            return jsonify({"error": f"Invalid process_mode. Must be one of: {VALID_PROCESSES}"}), 400
 
         print(f"[API] 공정={process_mode}, 기간={start_date}~{end_date}")
 
@@ -268,12 +294,20 @@ def get_analysis_data():
             estimated_total = full_df['pcs_completed'].sum()
             print(f"[API] 포장실 PCS 추정 적용: {int(original_total):,} PCS (실제) → {int(estimated_total):,} PCS (추정, {len(full_df)}트레이 × 60)")
 
-        # 테스트 데이터 제외 (포장실의 1.0.5는 실제 작업자이므로 제외하지 않음)
-        TEST_WORKERS = ['3', 'TEST', '1234', '2', 'TESTER']
+        # 테스트 데이터 제외 (설정에서 로드, 포장실의 1.0.5는 실제 작업자이므로 제외하지 않음)
+        test_workers = app_config.worker.TEST_WORKERS.copy()
         if process_mode != '포장실':
-            TEST_WORKERS.append('1.0.5')  # 포장실 외에서는 1.0.5 제외
-        full_df = full_df[~full_df['worker'].isin(TEST_WORKERS)].copy()
+            test_workers.append('1.0.5')  # 포장실 외에서는 1.0.5 제외
+        full_df = full_df[~full_df['worker'].isin(test_workers)].copy()
         print(f"[API] 테스트 작업자 제외 후: {len(full_df)}개 세션")
+
+        # 작업자명 정규화 (특수문자 제거 및 오타 수정)
+        if not full_df.empty and 'worker' in full_df.columns:
+            original_workers = full_df['worker'].nunique()
+            full_df['worker'] = full_df['worker'].apply(normalize_worker_name)
+            normalized_workers = full_df['worker'].nunique()
+            if original_workers != normalized_workers:
+                print(f"[API] 작업자명 정규화: {original_workers}명 → {normalized_workers}명 (중복 병합)")
 
         if full_df.empty:
             print("[API] 데이터 없음")
@@ -537,6 +571,20 @@ def get_analysis_data():
                 import traceback
                 traceback.print_exc()
 
+        # HR용 전체 데이터 (날짜 필터 없이 모든 기록)
+        hr_sessions_data = []
+        try:
+            hr_df = db.get_sessions(process=process_mode)  # 날짜 필터 없이 전체 조회
+            if not hr_df.empty:
+                # 테스트 작업자 제외
+                hr_df = hr_df[~hr_df['worker'].isin(TEST_WORKERS)].copy()
+                # 작업자명 정규화
+                hr_df['worker'] = hr_df['worker'].apply(normalize_worker_name)
+                hr_sessions_data = json.loads(hr_df.replace([np.inf, -np.inf], np.nan).fillna('').to_json(orient='records', date_format='iso'))
+                print(f"[API] HR용 전체 데이터: {len(hr_sessions_data)}개 세션, {hr_df['worker'].nunique()}명 작업자")
+        except Exception as e:
+            print(f"[API] HR 데이터 로드 오류: {e}")
+
         response_data = {
             'kpis': convert_to_json_serializable(kpis),
             'worker_data': convert_to_json_serializable(worker_data_json),
@@ -544,6 +592,7 @@ def get_analysis_data():
             'workers': all_workers,
             'date_range': date_range,
             'filtered_sessions_data': safe_sessions_data,
+            'hr_sessions_data': hr_sessions_data,  # HR용 전체 데이터 (날짜 필터 없음)
             'historical_summary': safe_historical_summary,
             'baseline_stats': baseline_stats,
             'filtered_raw_events': [],
@@ -579,11 +628,15 @@ def get_analysis_data():
 def search_barcode():
     """바코드 검색 API - DB 기반"""
     try:
-        query = request.json
+        query = request.json or {}
         barcode = query.get('barcode', '').strip()
 
         if not barcode:
             return jsonify({"error": "바코드를 입력해주세요."}), 400
+
+        # 바코드 형식 검증
+        if not InputValidator.validate_barcode(barcode):
+            return jsonify({"error": "유효하지 않은 바코드 형식입니다."}), 400
 
         print(f"[API] 바코드 검색: {barcode}")
 
@@ -833,14 +886,18 @@ def get_realtime_data():
 def trace_data():
     """이력 추적 API - 바코드/세션 검색 (최적화됨)"""
     try:
-        query = request.json
+        query = request.json or {}
         barcode = query.get('barcode', '').strip()
         wid = query.get('wid', '').strip()
         fpb = query.get('fpb', '').strip()
 
-        # 날짜 범위 파라미터 (기본값: 최근 30일)
-        days_back = query.get('days_back', 30)
-        max_results = query.get('max_results', 1000)
+        # 입력 검증
+        if barcode and not InputValidator.validate_barcode(barcode):
+            return jsonify({"error": "유효하지 않은 바코드 형식입니다."}), 400
+
+        # 날짜 범위 파라미터 (기본값: 최근 30일, 최대 365일)
+        days_back = min(int(query.get('days_back', 30)), 365)
+        max_results = min(int(query.get('max_results', 1000)), 10000)
 
         # 시작 날짜 계산
         start_date = (datetime.now() - timedelta(days=days_back)).date().isoformat()
@@ -963,10 +1020,11 @@ def get_session_barcodes():
         return jsonify({"error": f"바코드 조회 중 오류: {e}"}), 500
 
 @app.route('/api/worker_hourly', methods=['POST'])
+@validate_date_params('start_date', 'end_date')
 def get_worker_hourly():
     """작업자별 시간당 생산량 API"""
     try:
-        query = request.json
+        query = request.json or {}
         worker = query.get('worker', '').strip()
         start_date = query.get('start_date')
         end_date = query.get('end_date')
@@ -975,10 +1033,23 @@ def get_worker_hourly():
         if not worker:
             return jsonify({"error": "작업자를 선택해주세요."}), 400
 
+        # 작업자명 검증
+        if not InputValidator.validate_worker_name(worker):
+            return jsonify({"error": "유효하지 않은 작업자명입니다."}), 400
+
+        # 유효한 공정 모드 확인
+        VALID_PROCESSES = ['이적실', '검사실', '포장실', '전체 비교']
+        if process_mode not in VALID_PROCESSES:
+            return jsonify({"error": f"Invalid process_mode"}), 400
+
         print(f"[API] 작업자 시간당 생산량: {worker}, {start_date}~{end_date}, {process_mode}")
 
         # 세션 데이터 조회 (선택 기간용 - 시간대별 생산량, 요약 통계)
         sessions_df = db.get_sessions(start_date=start_date, end_date=end_date, process=process_mode)
+
+        # 작업자명 정규화 적용 (메인 API와 동일하게)
+        if not sessions_df.empty and 'worker' in sessions_df.columns:
+            sessions_df['worker'] = sessions_df['worker'].apply(normalize_worker_name)
 
         # 일별 생산량용 1개월 데이터 조회
         if end_date:
@@ -989,6 +1060,23 @@ def get_worker_hourly():
             daily_start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
 
         daily_sessions_df = db.get_sessions(start_date=daily_start, end_date=daily_end, process=process_mode)
+
+        # 작업자명 정규화 적용 (일별 데이터)
+        if not daily_sessions_df.empty and 'worker' in daily_sessions_df.columns:
+            daily_sessions_df['worker'] = daily_sessions_df['worker'].apply(normalize_worker_name)
+
+        # 전체 기간 작업일수 조회 (필터 무관)
+        all_time_df = db.get_sessions(start_date=None, end_date=None, process=process_mode)
+
+        # 작업자명 정규화 적용 (전체 기간)
+        if not all_time_df.empty and 'worker' in all_time_df.columns:
+            all_time_df['worker'] = all_time_df['worker'].apply(normalize_worker_name)
+
+        total_num_days = 0
+        if not all_time_df.empty:
+            worker_all_df = all_time_df[all_time_df['worker'] == worker]
+            if not worker_all_df.empty:
+                total_num_days = worker_all_df['date'].nunique()
 
         if sessions_df.empty and daily_sessions_df.empty:
             return jsonify({
@@ -1049,6 +1137,7 @@ def get_worker_hourly():
                 'avg_work_time': round(worker_df['work_time'].mean(), 1),
                 'avg_latency': round(worker_df['latency'].mean(), 1),
                 'num_days': num_days,
+                'total_num_days': total_num_days,  # 전체 기간 작업일수
                 'first_pass_yield': round((worker_df['had_error'] == 0).sum() / len(worker_df) * 100, 1) if len(worker_df) > 0 else 0
             }
 

@@ -3,18 +3,69 @@
 재고 원장 데이터 조회 서비스
 ERPNext MariaDB 연동
 """
+import os
+import json
 import pymysql
 from decimal import Decimal
 
-# ERPNext MariaDB 설정
-DB_CONFIG = {
-    'host': 'localhost',
-    'port': 3306,
-    'user': '_c3e9ce1114f11fa0',
-    'password': '1TjMMl3QgvgYo5qX',
-    'database': '_c3e9ce1114f11fa0',
-    'charset': 'utf8mb4'
-}
+def load_db_config():
+    """환경변수 또는 설정 파일에서 DB 설정 로드"""
+    # 1. 환경변수에서 로드 시도
+    if os.environ.get('ERPNEXT_DB_HOST'):
+        return {
+            'host': os.environ.get('ERPNEXT_DB_HOST', 'localhost'),
+            'port': int(os.environ.get('ERPNEXT_DB_PORT', 3306)),
+            'user': os.environ.get('ERPNEXT_DB_USER'),
+            'password': os.environ.get('ERPNEXT_DB_PASSWORD'),
+            'database': os.environ.get('ERPNEXT_DB_NAME'),
+            'charset': 'utf8mb4'
+        }
+
+    # 2. 설정 파일에서 로드 시도
+    config_paths = [
+        '/root/WorkerAnalysisGUI-web/config/erpnext_db.json',
+        '/etc/kmtech/erpnext_db.json',
+        os.path.expanduser('~/.erpnext_db.json')
+    ]
+
+    for config_path in config_paths:
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    return {
+                        'host': config.get('host', 'localhost'),
+                        'port': config.get('port', 3306),
+                        'user': config.get('user'),
+                        'password': config.get('password'),
+                        'database': config.get('database'),
+                        'charset': 'utf8mb4'
+                    }
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"[Stock] DB 설정 파일 로드 오류 ({config_path}): {e}")
+                continue
+
+    # 3. Fallback: Frappe site_config.json에서 로드
+    frappe_config_path = '/home/frappe/frappe-bench/sites/kmtech.localhost/site_config.json'
+    if os.path.exists(frappe_config_path):
+        try:
+            with open(frappe_config_path, 'r') as f:
+                config = json.load(f)
+                return {
+                    'host': config.get('db_host', 'localhost'),
+                    'port': config.get('db_port', 3306),
+                    'user': config.get('db_name'),  # Frappe는 DB 이름 = 사용자명
+                    'password': config.get('db_password'),
+                    'database': config.get('db_name'),
+                    'charset': 'utf8mb4'
+                }
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[Stock] Frappe 설정 로드 오류: {e}")
+
+    raise RuntimeError("ERPNext DB 설정을 찾을 수 없습니다. 환경변수 또는 설정 파일을 확인하세요.")
+
+# ERPNext MariaDB 설정 로드
+DB_CONFIG = load_db_config()
 
 # Stock Entry Types 정의
 STOCK_ENTRY_TYPES = {

@@ -1,12 +1,87 @@
+// 전역 에러 핸들러 - 에러를 화면에 표시
+window.onerror = function(message, source, lineno, colno, error) {
+    const errorDiv = document.createElement('div');
+    errorDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:red;color:white;padding:20px;z-index:99999;font-size:14px;';
+    errorDiv.innerHTML = `
+        <h2>❌ JavaScript 에러 발생</h2>
+        <p><strong>메시지:</strong> ${message}</p>
+        <p><strong>파일:</strong> ${source}</p>
+        <p><strong>라인:</strong> ${lineno}:${colno}</p>
+        <pre>${error ? error.stack : ''}</pre>
+    `;
+    document.body.appendChild(errorDiv);
+    console.error('전역 에러:', message, error);
+    return false;
+};
+
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('🚀 DOMContentLoaded 이벤트 발생');
+
+    // ########################
+    // ### 로컬 스토리지 관리 ###
+    // ########################
+    const STORAGE_KEY = 'worker_analysis_filters';
+    const CACHE_KEY = 'worker_analysis_cache';
+    const CACHE_DURATION = 5 * 60 * 1000; // 5분
+
+    function saveFiltersToStorage() {
+        try {
+            const filters = {
+                process_mode: state.process_mode,
+                start_date: state.start_date,
+                end_date: state.end_date,
+                selected_workers: state.selected_workers,
+                timestamp: Date.now()
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
+        } catch (e) {
+            console.warn('로컬 스토리지 저장 실패:', e);
+        }
+    }
+
+    function loadFiltersFromStorage() {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                const filters = JSON.parse(saved);
+                // 오늘 날짜가 아니면 로드하지 않음 (하루가 지났으면 초기화)
+                const savedDate = new Date(filters.timestamp);
+                const today = new Date();
+                if (savedDate.toDateString() === today.toDateString()) {
+                    return filters;
+                }
+            }
+        } catch (e) {
+            console.warn('로컬 스토리지 로드 실패:', e);
+        }
+        return null;
+    }
+
+    function saveCacheToStorage(cacheKey, data) {
+        // 캐시 기능 비활성화 - 브라우저 멈춤 방지
+        console.log('💾 캐시 저장 건너뜀 (비활성화됨)');
+        return;
+    }
+
+    function loadCacheFromStorage(cacheKey) {
+        // 캐시 기능 비활성화 - 브라우저 멈춤 방지
+        console.log('📦 캐시 로드 건너뜀 (비활성화됨)');
+        return null;
+    }
+
     // ########################
     // ### 글로벌 상태 및 상수 ###
     // ########################
-    // 오늘 날짜를 기본값으로 설정
     const today = new Date().toISOString().split('T')[0];
+
+    // 기본 시작일: 6개월 전
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const defaultStartDate = sixMonthsAgo.toISOString().split('T')[0];
+
     const state = {
         process_mode: '이적실',
-        start_date: today,
+        start_date: defaultStartDate,
         end_date: today,
         selected_workers: [],
         active_tab: '',
@@ -30,6 +105,18 @@ document.addEventListener('DOMContentLoaded', () => {
             rows_per_page: 50,
             results_cache: [],
         },
+        // 각 탭별 기간 필터 상태 (오늘|1주일|1개월|분기)
+        tab_periods: {
+            '실시간 현황': 'today',
+            '일간 생산량 분석': 'week',
+            '일간 검사량 분석': 'week',
+            '출고일자별 분석': 'week',
+            '작업자별 분석': 'week',
+            '오류 로그': 'week',
+            '생산 이력 추적': 'week',
+            '상세 데이터': 'week',
+            '공정 비교 분석': 'week',
+        },
     };
 
     // 동적 탭 생성 함수
@@ -40,7 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const baseTabs = {
             "이적실": [
                 isRealTime ? "실시간 현황" : `${periodLabel} 현황`,
-                `${periodLabel} 생산량 분석`,
+                "일간 생산량 분석",
                 "작업자별 분석",
                 "오류 로그",
                 "생산 이력 추적",
@@ -48,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ],
             "검사실": [
                 isRealTime ? "실시간 현황" : `${periodLabel} 현황`,
-                `${periodLabel} 검사량 분석`,
+                "일간 검사량 분석",
                 "작업자별 분석",
                 "오류 로그",
                 "생산 이력 추적",
@@ -56,7 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ],
             "포장실": [
                 isRealTime ? "실시간 현황" : `${periodLabel} 현황`,
-                `${periodLabel} 생산량 추이 분석`,
+                "일간 생산량 분석",
                 "출고일자별 분석",
                 "오류 로그",
                 "생산 이력 추적",
@@ -81,6 +168,38 @@ document.addEventListener('DOMContentLoaded', () => {
                (dateRange.start_date === yesterday && dateRange.end_date === today);
     }
 
+    function getDateRangeDays(dateRange) {
+        if (!dateRange || !dateRange.start_date || !dateRange.end_date) return 0;
+        const start = new Date(dateRange.start_date);
+        const end = new Date(dateRange.end_date);
+        return Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1; // +1 to include end date
+    }
+
+    function isDateRangeSingleDay(dateRange) {
+        if (!dateRange || !dateRange.start_date || !dateRange.end_date) return false;
+        return dateRange.start_date === dateRange.end_date;
+    }
+
+    function isDateRangeWeekly(dateRange) {
+        const days = getDateRangeDays(dateRange);
+        return days >= 2 && days <= 31; // 2-31일: 일별 차트
+    }
+
+    function isDateRangeMonthly(dateRange) {
+        const days = getDateRangeDays(dateRange);
+        return days >= 32 && days <= 91; // 32-91일: 주별 차트
+    }
+
+    function isDateRangeQuarterly(dateRange) {
+        const days = getDateRangeDays(dateRange);
+        return days >= 92; // 92일 이상: 월별 차트
+    }
+
+    function isDateRangeMonthlyOrMore(dateRange) {
+        const days = getDateRangeDays(dateRange);
+        return days >= 92; // 92일 이상만 월별 집계
+    }
+
     function getPeriodLabel(dateRange, isRealTime) {
         if (isRealTime) return "실시간";
 
@@ -96,7 +215,90 @@ document.addEventListener('DOMContentLoaded', () => {
         if (diffDays <= 93) return "분기";
         return "기간";
     }
-    
+
+    // ########################
+    // ### 탭별 기간 필터 헬퍼 함수 ###
+    // ########################
+
+    // 기간 필터 버튼 HTML 생성
+    function createPeriodButtons(tabName) {
+        const currentPeriod = state.tab_periods[tabName] || 'week';
+        return `
+            <div class="date-presets" data-tab="${tabName}">
+                <button type="button" class="btn-preset ${currentPeriod === 'today' ? 'active' : ''}" data-preset="today">오늘</button>
+                <button type="button" class="btn-preset ${currentPeriod === 'week' ? 'active' : ''}" data-preset="week">1주일</button>
+                <button type="button" class="btn-preset ${currentPeriod === 'month' ? 'active' : ''}" data-preset="month">1개월</button>
+                <button type="button" class="btn-preset ${currentPeriod === 'quarter' ? 'active' : ''}" data-preset="quarter">분기</button>
+            </div>
+        `;
+    }
+
+    // 기간 프리셋에 따른 날짜 범위 계산
+    function getDateRangeFromPreset(preset) {
+        const today = new Date();
+        const endDateStr = today.toISOString().split('T')[0];
+        let startDateStr;
+
+        switch (preset) {
+            case 'today':
+                // 오늘: 오늘 하루만 (시간별 차트)
+                startDateStr = endDateStr;
+                break;
+            case 'week':
+                // 1주일: 최근 30일 데이터 (일별 차트)
+                const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+                startDateStr = monthAgo.toISOString().split('T')[0];
+                break;
+            case 'month':
+                // 1개월: 최근 90일 데이터 (주별 차트)
+                const quarterAgo = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
+                startDateStr = quarterAgo.toISOString().split('T')[0];
+                break;
+            case 'quarter':
+                // 분기: 최근 180일(6개월) 데이터 (월별 차트)
+                const sixMonthsAgo = new Date(today.getTime() - 180 * 24 * 60 * 60 * 1000);
+                startDateStr = sixMonthsAgo.toISOString().split('T')[0];
+                break;
+            default:
+                startDateStr = defaultStartDate;
+        }
+
+        return { start_date: startDateStr, end_date: endDateStr };
+    }
+
+    // 기간 필터 버튼 이벤트 리스너 연결
+    function attachPeriodButtonListeners(container, tabName, reloadCallback) {
+        const buttons = container.querySelectorAll('.btn-preset');
+        buttons.forEach(btn => {
+            btn.addEventListener('click', (event) => {
+                const preset = event.target.dataset.preset;
+
+                // 탭별 기간 상태 업데이트
+                state.tab_periods[tabName] = preset;
+
+                // 버튼 활성화 상태 업데이트
+                buttons.forEach(b => b.classList.remove('active'));
+                event.target.classList.add('active');
+
+                // 날짜 범위 계산 및 전역 state 업데이트
+                const dateRange = getDateRangeFromPreset(preset);
+                state.start_date = dateRange.start_date;
+                state.end_date = dateRange.end_date;
+
+                // 디버그 로그
+                const days = getDateRangeDays({start_date: state.start_date, end_date: state.end_date});
+                console.log(`🔘 [${tabName}] "${preset}" 버튼 클릭 →`, state.start_date, '~', state.end_date, `(${days}일)`);
+
+                // 데이터 다시 로드
+                if (reloadCallback) {
+                    reloadCallback();
+                } else {
+                    fetchAnalysisData();
+                }
+            });
+        });
+    }
+
     const RADAR_METRICS_CONFIG = {
         "포장실": { '세트완료시간': 'avg_work_time', '첫스캔준비성': 'avg_latency', '무결점달성률': 'first_pass_yield', '세트당PCS': 'avg_pcs_per_tray' },
         "이적실": { '신속성': 'avg_work_time', '준속성': 'avg_latency', '초도수율': 'first_pass_yield', '안정성': 'work_time_std' },
@@ -111,11 +313,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const elements = {
         loadingOverlay: document.getElementById('loading-overlay'),
         processModeRadios: document.getElementById('process-mode-radios'),
-        startDateInput: document.getElementById('start-date-input'),
-        endDateInput: document.getElementById('end-date-input'),
-        workerList: document.getElementById('worker-list'),
-        runAnalysisBtn: document.getElementById('run-analysis-btn'),
-        resetFiltersBtn: document.getElementById('reset-filters-btn'),
         mainTitle: document.getElementById('main-title'),
         tabsContainer: document.querySelector('.tabs'),
         tabContentContainer: document.querySelector('.tab-content'),
@@ -140,10 +337,28 @@ document.addEventListener('DOMContentLoaded', () => {
     initialize();
 
     function initialize() {
-        loadFiltersFromStorage();
         loadFontSize();
+        applyStoredFiltersToUI();
         bindEventListeners();
         fetchAnalysisData();
+    }
+
+    function applyStoredFiltersToUI() {
+        // 저장된 필터를 UI에 반영
+        const savedFilters = loadFiltersFromStorage();
+        if (savedFilters) {
+            // state 업데이트 (날짜는 제외 - 항상 기본 6개월 사용)
+            state.process_mode = savedFilters.process_mode;
+            state.selected_workers = savedFilters.selected_workers || [];
+
+            // 공정 모드 라디오 버튼 설정
+            const processModeRadio = document.querySelector(`input[name="process_mode"][value="${savedFilters.process_mode}"]`);
+            if (processModeRadio) {
+                processModeRadio.checked = true;
+            }
+
+            console.log('✅ 저장된 필터 복원 (날짜 제외):', savedFilters);
+        }
     }
 
     function changeFontSize(delta) {
@@ -166,8 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
     function bindEventListeners() {
         elements.processModeRadios.addEventListener('change', handleProcessModeChange);
-        elements.runAnalysisBtn.addEventListener('click', () => fetchAnalysisData());
-        elements.resetFiltersBtn.addEventListener('click', resetFiltersAndRunAnalysis);
+        // 분석 실행 및 필터 초기화 버튼은 사이드바에서 제거됨
 
         const decreaseFontSizeBtn = document.getElementById('decrease-font-size');
         const increaseFontSizeBtn = document.getElementById('increase-font-size');
@@ -175,20 +389,20 @@ document.addEventListener('DOMContentLoaded', () => {
         decreaseFontSizeBtn.addEventListener('click', () => changeFontSize(-1));
         increaseFontSizeBtn.addEventListener('click', () => changeFontSize(1));
 
-        // 날짜 프리셋 버튼 이벤트
-        document.querySelectorAll('.btn-preset').forEach(btn => {
-            btn.addEventListener('click', handleDatePreset);
-        });
+        // 날짜 프리셋 버튼 이벤트 (생산량 분석 탭으로 이동됨)
+        // document.querySelectorAll('.btn-preset').forEach(btn => {
+        //     btn.addEventListener('click', handleDatePreset);
+        // });
 
-        // 작업자 필터 컨트롤 이벤트
-        document.getElementById('select-all-workers').addEventListener('click', selectAllWorkers);
-        document.getElementById('deselect-all-workers').addEventListener('click', deselectAllWorkers);
-        document.getElementById('select-top-performers').addEventListener('click', selectTopPerformers);
+        // 작업자 필터 컨트롤 이벤트 (작업자 선택 기능 비활성화됨)
+        // document.getElementById('select-all-workers')?.addEventListener('click', selectAllWorkers);
+        // document.getElementById('deselect-all-workers')?.addEventListener('click', deselectAllWorkers);
+        // document.getElementById('select-top-performers')?.addEventListener('click', selectTopPerformers);
 
-        // 고급 필터 이벤트
-        document.querySelectorAll('.advanced-filters input[type="checkbox"]').forEach(checkbox => {
-            checkbox.addEventListener('change', handleAdvancedFilter);
-        });
+        // 고급 필터 이벤트 (고급 필터 기능 비활성화됨)
+        // document.querySelectorAll('.advanced-filters input[type="checkbox"]').forEach(checkbox => {
+        //     checkbox.addEventListener('change', handleAdvancedFilter);
+        // });
     }
 
     // ########################
@@ -206,69 +420,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function handleDatePreset(event) {
-        const preset = event.target.dataset.preset;
-        const today = new Date();
-        let startDate, endDate;
-
-        switch (preset) {
-            case 'today':
-                startDate = endDate = today;
-                break;
-            case 'week':
-                startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-                endDate = today;
-                break;
-            case 'month':
-                startDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-                endDate = today;
-                break;
-            case 'quarter':
-                startDate = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
-                endDate = today;
-                break;
-        }
-
-        elements.startDateInput.value = startDate.toISOString().split('T')[0];
-        elements.endDateInput.value = endDate.toISOString().split('T')[0];
-
-        // 프리셋 버튼 활성화 표시
-        document.querySelectorAll('.btn-preset').forEach(btn => btn.classList.remove('active'));
-        event.target.classList.add('active');
-
-        // 자동으로 분석 실행
-        fetchAnalysisData();
-    }
-
-    function resetFiltersAndRunAnalysis() {
-        if (state.full_data && state.full_data.date_range) {
-            elements.startDateInput.value = state.full_data.date_range.min;
-            elements.endDateInput.value = state.full_data.date_range.max;
-        }
-
-        // 프리셋 버튼 초기화
-        document.querySelectorAll('.btn-preset').forEach(btn => btn.classList.remove('active'));
-
-        for (let option of elements.workerList.options) {
-            option.selected = true;
-        }
-        fetchAnalysisData();
-    }
+    // 사이드바 프리셋 버튼 제거로 인해 더 이상 사용되지 않음
+    // 탭별 기간 필터로 대체됨
 
     function selectAllWorkers() {
+        if (!elements.workerList) return;
         for (let option of elements.workerList.options) {
             option.selected = true;
         }
     }
 
     function deselectAllWorkers() {
+        if (!elements.workerList) return;
         for (let option of elements.workerList.options) {
             option.selected = false;
         }
     }
 
     function selectTopPerformers() {
-        if (!state.full_data || !state.full_data.worker_data) return;
+        if (!elements.workerList || !state.full_data || !state.full_data.worker_data) return;
 
         const topPerformers = state.full_data.worker_data
             .sort((a, b) => b.overall_score - a.overall_score)
@@ -284,7 +454,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const filterId = event.target.id;
         const isChecked = event.target.checked;
 
-        if (!state.full_data || !state.full_data.worker_data) return;
+        // 작업자 선택 기능 비활성화됨
+        if (!elements.workerList || !state.full_data || !state.full_data.worker_data) return;
 
         let targetWorkers = [];
 
@@ -353,17 +524,52 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
     // ### API 통신 ###
     // ########################
-    async function fetchAnalysisData() {
-        toggleLoading(true);
+    async function fetchAnalysisData(retryCount = 0) {
+        const MAX_RETRIES = 2;
+        const TIMEOUT_MS = 30000; // 30초 타임아웃
+
+        const mainMessage = retryCount > 0
+            ? `데이터를 다시 불러오는 중입니다...`
+            : '데이터 분석 중...';
+        const subMessage = retryCount > 0
+            ? `재시도 ${retryCount}/${MAX_RETRIES}`
+            : 'CSV 파일을 읽고 분석하는 중입니다';
+
+        toggleLoading(true, mainMessage, subMessage);
         elements.tabsContainer.innerHTML = '';
-        elements.tabContentContainer.innerHTML = '<div class="card"><p>데이터를 분석하고 있습니다. 잠시만 기다려 주세요...</p></div>';
+
+        const loadingMessage = retryCount > 0
+            ? `<div class="card"><p>데이터를 다시 불러오는 중입니다... (재시도 ${retryCount}/${MAX_RETRIES})</p></div>`
+            : '<div class="card"><p>데이터를 분석하고 있습니다. 잠시만 기다려 주세요...</p></div>';
+        elements.tabContentContainer.innerHTML = loadingMessage;
 
         // Reset page number for detailed data tab
         state.detailed_data.current_page = 1;
 
-        state.start_date = elements.startDateInput.value;
-        state.end_date = elements.endDateInput.value;
-        state.selected_workers = Array.from(elements.workerList.selectedOptions).map(opt => opt.value);
+        // state.start_date와 state.end_date는 기간 필터 버튼에서 이미 설정됨
+        // 작업자 선택 기능 비활성화 - 모든 작업자 포함
+        state.selected_workers = [];
+
+        // 필터 상태 저장
+        saveFiltersToStorage();
+
+        // 캐시 키 생성
+        const cacheKey = `${CACHE_KEY}_${state.process_mode}_${state.start_date}_${state.end_date}_${state.selected_workers.join(',')}`;
+
+        // 캐시 기능 비활성화 - 항상 서버에서 최신 데이터 로드
+        console.log('🔄 서버에서 데이터 로드 (캐시 비활성화)');
+        // const cachedData = loadCacheFromStorage(cacheKey);
+        // if (cachedData && retryCount === 0) {
+        //     console.log('✅ 캐시에서 데이터 로드');
+        //     state.full_data = cachedData;
+        //     updateDashboard(cachedData);
+        //     toggleLoading(false);
+        //     return;
+        // }
+
+        // 타임아웃을 위한 AbortController
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
         try {
             const response = await fetch('/api/data', {
@@ -375,16 +581,77 @@ document.addEventListener('DOMContentLoaded', () => {
                     end_date: state.end_date,
                     selected_workers: state.selected_workers,
                 }),
+                signal: controller.signal
             });
-            if (!response.ok) throw new Error((await response.json()).error || `HTTP Error: ${response.status}`);
-            
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `서버 오류 (${response.status})`);
+            }
+
             const data = await response.json();
+            console.log('✅ [fetchAnalysisData] API 응답 수신:', {
+                kpis: Object.keys(data.kpis || {}).length,
+                workers: data.workers?.length || 0,
+                sessions: data.filtered_sessions_data?.length || 0
+            });
+
             state.full_data = data;
-            updateDashboard(data);
+
+            // 캐시 기능 비활성화
+            // saveCacheToStorage(cacheKey, data);
+            console.log('💾 데이터 캐시 저장 건너뜀 (비활성화)');
+
+            try {
+                console.log('🔄 [fetchAnalysisData] updateDashboard 호출 시작...');
+                updateDashboard(data);
+                console.log('✅ [fetchAnalysisData] updateDashboard 완료');
+            } catch (dashboardError) {
+                console.error('❌ [fetchAnalysisData] updateDashboard 에러:', dashboardError);
+                throw dashboardError;
+            }
 
         } catch (error) {
+            clearTimeout(timeoutId);
             console.error('데이터 분석 중 오류 발생:', error);
-            elements.tabContentContainer.innerHTML = `<div class="card"><p style="color: var(--color-danger);">데이터를 불러오는 데 실패했습니다: ${error.message}</p></div>`;
+
+            let errorMessage = '';
+            let shouldRetry = false;
+
+            if (error.name === 'AbortError') {
+                errorMessage = '요청 시간이 초과되었습니다. 데이터 양이 많거나 서버가 응답하지 않습니다.';
+                shouldRetry = true;
+            } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                errorMessage = '네트워크 연결 오류가 발생했습니다. 인터넷 연결을 확인해주세요.';
+                shouldRetry = true;
+            } else {
+                errorMessage = `데이터를 불러오는 데 실패했습니다: ${error.message}`;
+                shouldRetry = true;
+            }
+
+            // 재시도 로직
+            if (shouldRetry && retryCount < MAX_RETRIES) {
+                console.log(`재시도 ${retryCount + 1}/${MAX_RETRIES}...`);
+                setTimeout(() => fetchAnalysisData(retryCount + 1), 2000); // 2초 후 재시도
+                return;
+            }
+
+            // 최종 실패 시 에러 표시
+            elements.tabContentContainer.innerHTML = `
+                <div class="card" style="padding: 2rem; text-align: center;">
+                    <p style="color: var(--color-danger); font-weight: 600; font-size: 16px; margin-bottom: 12px;">
+                        ⚠️ ${errorMessage}
+                    </p>
+                    <p style="color: var(--text-muted); margin-bottom: 16px;">
+                        ${retryCount >= MAX_RETRIES ? `${MAX_RETRIES}회 재시도했지만 실패했습니다.` : ''}
+                    </p>
+                    <button onclick="location.reload()" class="btn btn-primary" style="margin-top: 8px;">
+                        페이지 새로고침
+                    </button>
+                </div>
+            `;
         } finally {
             toggleLoading(false);
         }
@@ -392,7 +659,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchRealtimeData() {
         try {
-            const response = await fetch(`/api/realtime?process_mode=${state.process_mode}`);
+            const params = new URLSearchParams({ process_mode: state.process_mode });
+            const response = await fetch(`/api/realtime?${params.toString()}`);
             if (!response.ok) throw new Error('실시간 데이터 로드 실패');
             return await response.json();
         } catch (error) {
@@ -404,22 +672,49 @@ document.addEventListener('DOMContentLoaded', () => {
     // ########################
     // ### 메인 UI 렌더링 ###
     // ########################
-    function toggleLoading(isLoading) {
+    function toggleLoading(isLoading, message = '데이터 분석 중...', submessage = '잠시만 기다려 주세요') {
         elements.loadingOverlay.classList.toggle('hidden', !isLoading);
-        elements.runAnalysisBtn.disabled = isLoading;
+        // 분석 실행 버튼 제거됨
+
+        if (isLoading) {
+            const loadingMessage = document.getElementById('loading-message');
+            const loadingSubmessage = document.getElementById('loading-submessage');
+            if (loadingMessage) loadingMessage.textContent = message;
+            if (loadingSubmessage) loadingSubmessage.textContent = submessage;
+        }
     }
 
     function updateDashboard(data) {
-        updateMainTitle();
-        renderFilterControls(data.workers, data.date_range);
-        renderTabs();
-        renderActiveTabData();
+        console.log('📊 [updateDashboard] 시작');
+
+        try {
+            console.log('  ├─ updateMainTitle 호출...');
+            updateMainTitle();
+
+            console.log('  ├─ renderFilterControls 호출...');
+            renderFilterControls(data.workers, data.date_range);
+
+            console.log('  ├─ renderTabs 호출...');
+            renderTabs();
+
+            console.log('  ├─ renderActiveTabData 호출...');
+            renderActiveTabData();
+
+            console.log('  └─ toggleLoading(false) 호출...');
+            toggleLoading(false);
+
+            console.log('✅ [updateDashboard] 완료');
+        } catch (error) {
+            console.error('❌ [updateDashboard] 에러:', error);
+            toggleLoading(false);
+            throw error;
+        }
     }
 
     function updateMainTitle() {
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
 
         const isRealTime = isDateRangeRealTime(dateRange);
@@ -446,6 +741,12 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`🔧 [DEBUG] renderFilterControls 호출됨 - 작업자 수: ${workers.length}`);
         console.log(`👥 [DEBUG] 작업자 목록:`, workers);
 
+        // 작업자 선택 기능 비활성화됨
+        if (!elements.workerList) {
+            console.log('⚠️ [DEBUG] 작업자 리스트 요소가 없습니다 (기능 비활성화됨)');
+            return;
+        }
+
         const currentSelection = new Set(Array.from(elements.workerList.selectedOptions).map(opt => opt.value));
         elements.workerList.innerHTML = '';
         workers.forEach(worker => {
@@ -460,8 +761,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         console.log(`✅ [DEBUG] 작업자 리스트 렌더링 완료 - 옵션 수: ${elements.workerList.options.length}`);
 
-        if (!elements.startDateInput.value && date_range.min) elements.startDateInput.value = date_range.min;
-        if (!elements.endDateInput.value && date_range.max) elements.endDateInput.value = date_range.max;
+        // 날짜 입력 필드 제거됨 - state에서 직접 관리
     }
 
     function renderTabs() {
@@ -469,8 +769,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 날짜 범위 정보 생성
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
 
         const tabsForMode = getTabsForProcess(state.process_mode, dateRange);
@@ -545,30 +845,34 @@ document.addEventListener('DOMContentLoaded', () => {
     async function renderRealtimeTab(pane) {
         // 동적 제목 생성
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
         const title = isRealTime ? '실시간 현황 (오늘)' : `${periodLabel} 현황`;
+        const tabName = state.active_tab;
 
         pane.appendChild(createTabHeader(title, [], () => renderActiveTabData()));
 
         const content = document.createElement('div');
         pane.appendChild(content);
         content.innerHTML = `
-            <div class="kpi-grid">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 id="chart-title" style="margin: 0;">📈 시간별 생산량 추이 및 효율성 비교</h4>
+                    ${createPeriodButtons(tabName)}
+                </div>
+                <div class="chart-container" id="realtime-hourly-chart-container">
+                    <canvas id="realtime-hourly-chart"></canvas>
+                </div>
+            </div>
+            <div class="kpi-grid" style="margin-top: 20px;">
                 <div id="realtime-worker-status" class="card"></div>
                 <div id="realtime-item-status" class="card"></div>
             </div>
             <div id="monthly-averages-section" class="kpi-grid" style="margin-top: 20px;">
                 <div id="monthly-averages-card" class="card"></div>
-            </div>
-            <div class="card">
-                <h4 id="chart-title" style="margin-bottom: 1rem; text-align: center;">📈 시간별 생산량 추이 및 효율성 비교</h4>
-                <div class="chart-container" id="realtime-hourly-chart-container">
-                    <canvas id="realtime-hourly-chart"></canvas>
-                </div>
             </div>`;
         
         const realtimeData = await fetchRealtimeData();
@@ -714,21 +1018,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         });
+
+        // 기간 필터 버튼 이벤트 리스너 연결
+        attachPeriodButtonListeners(content, tabName, () => renderActiveTabData());
     }
 
     function renderProductionTab(pane, data) {
         // 기간 정보 가져오기
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const tabName = state.active_tab;
 
         // 데이터 신선도 체크 - 세션 데이터가 비어있으면 경고
         const sessions = data.filtered_sessions_data || [];
         if (sessions.length === 0) {
-            console.warn('⚠️ [WARNING] 필터링된 세션 데이터가 비어있습니다. "분석 실행" 버튼을 다시 클릭하세요.');
+            console.warn('⚠️ [WARNING] 필터링된 세션 데이터가 비어있습니다.');
         }
 
         // 동적 제목 생성
@@ -740,18 +1048,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const kpis = calculatePeriodAwareKPIs(data, dateRange, isRealTime);
 
         content.innerHTML = `
+            <div class="card" style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="margin: 0;">📊 생산량 추이 분석</h4>
+                    ${createPeriodButtons(tabName)}
+                </div>
+                <div class="chart-container"><canvas id="production-trend-chart"></canvas></div>
+            </div>
             <div class="kpi-grid">
                 ${createCard('평균 트레이 작업시간', formatSeconds(kpis.avg_tray_time || 0))}
                 ${createCard('초도 수율 (FPY)', `${(kpis.avg_fpy * 100).toFixed(1)}%`, 'positive')}
                 ${createCard(`${periodLabel} 총 생산량`, `${kpis.total_production.toLocaleString()} PCS`, 'positive')}
-            </div>
-            <div class="card">
-                <h4 style="margin-bottom: 1rem;">${periodLabel} 생산량 추이</h4>
-                <div class="chart-container"><canvas id="production-trend-chart"></canvas></div>
             </div>`;
 
-        // 기간별 차트 데이터 생성
-        generatePeriodAwareProductionChart(data, dateRange, isRealTime, periodLabel);
+        // DOM이 완전히 렌더링된 후 차트 생성 및 이벤트 리스너 추가
+        setTimeout(() => {
+            console.log('📊 [renderProductionTab] 차트 생성 시작 (setTimeout)');
+            generatePeriodAwareProductionChart(data, dateRange, isRealTime, periodLabel);
+
+            // 기간 필터 버튼 이벤트 리스너 연결
+            attachPeriodButtonListeners(content, tabName, () => fetchAnalysisData());
+        }, 100);
     }
 
     function calculatePeriodAwareKPIs(data, dateRange, isRealTime) {
@@ -778,9 +1095,28 @@ document.addEventListener('DOMContentLoaded', () => {
     function generatePeriodAwareProductionChart(data, dateRange, isRealTime, periodLabel) {
         let sessions = data.filtered_sessions_data || [];
 
-        console.log('📊 [DEBUG] 차트 시작 - 전체 세션:', sessions.length);
-        console.log('📅 [DEBUG] 날짜 범위:', dateRange);
-        console.log('🔍 [DEBUG] isRealTime:', isRealTime);
+        const days = getDateRangeDays(dateRange);
+        console.log('📊 [차트 생성] 세션:', sessions.length, '| 날짜:', dateRange.start_date, '~', dateRange.end_date, `| 일수: ${days}일`);
+        console.log('🔍 [차트 생성] isRealTime:', isRealTime, '| isWeekly:', isDateRangeWeekly(dateRange), '| isMonthly:', isDateRangeMonthly(dateRange));
+
+        // Canvas 엘리먼트 존재 확인
+        const canvas = document.getElementById('production-trend-chart');
+        if (!canvas) {
+            console.error('❌ [ERROR] Canvas element not found: production-trend-chart');
+            return;
+        }
+        console.log('✅ [DEBUG] Canvas element found');
+
+        // 세션 데이터 확인
+        if (sessions.length === 0) {
+            console.warn('⚠️ [WARNING] No session data available for chart');
+            // 빈 차트 메시지 표시
+            const chartContainer = canvas.parentElement;
+            if (chartContainer) {
+                chartContainer.innerHTML = '<p style="text-align: center; color: #666; padding: 40px;">데이터가 없습니다. 분석 실행 버튼을 클릭하세요.</p>';
+            }
+            return;
+        }
 
         let chartData;
         let chartOptions = {
@@ -808,6 +1144,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isRealTime || isDateRangeSingleDay(dateRange)) {
             // 실시간/일간: 시간별 생산량 (6시-21시)
+            console.log('🕒 [DEBUG] 시간별 차트 경로 선택 (실시간 또는 단일 일자)');
             // 서버에서 이미 날짜 필터링된 데이터가 옴
             console.log('📊 [DEBUG] 차트용 세션 데이터 샘플:', sessions.slice(0, 2));
 
@@ -896,8 +1233,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 labels: hourLabels,
                 datasets: datasets
             };
+
+            // 시간별 차트 렌더링하고 종료
+            createChart('production-trend-chart', 'line', chartData, chartOptions);
+            return;
         } else if (isDateRangeWeekly(dateRange)) {
             // 주간: 일별 생산량
+            console.log('📅 [DEBUG] 일별 차트 경로 선택 (2-31일)');
             const productionByDate = sessions.reduce((acc, session) => {
                 if (!session.date) return acc;
                 const date = new Date(session.date).toISOString().split('T')[0];
@@ -973,79 +1315,129 @@ document.addEventListener('DOMContentLoaded', () => {
             // 막대 차트로 변경
             createChart('production-trend-chart', 'bar', chartData, chartOptions);
             return;
-        } else {
-            // 월간/분기: 주별 생산량
+        } else if (isDateRangeMonthly(dateRange)) {
+            // 월간 (32-91일): 주별 생산량
+            console.log('📅 [DEBUG] 주별 차트 경로 선택 (32-91일)');
+
+            // 주별 총량 계산
             const productionByWeek = {};
 
             sessions.forEach(session => {
+                if (!session.date && !session.start_time_dt) return;
                 const date = new Date(session.start_time_dt || session.date);
-                const weekStart = new Date(date);
-                weekStart.setDate(date.getDate() - date.getDay());
-                const weekKey = weekStart.toISOString().split('T')[0];
 
-                productionByWeek[weekKey] = (productionByWeek[weekKey] || 0) + (session.pcs_completed || 0);
+                // 해당 주의 월요일 날짜 구하기 (ISO 8601 기준)
+                const dayOfWeek = date.getDay(); // 0(일요일) ~ 6(토요일)
+                const diff = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek; // 월요일까지의 차이
+                const monday = new Date(date);
+                monday.setDate(date.getDate() + diff);
+                const weekKey = monday.toISOString().split('T')[0];
+
+                if (!productionByWeek[weekKey]) {
+                    productionByWeek[weekKey] = 0;
+                }
+                productionByWeek[weekKey] += (session.pcs_completed || 0);
             });
 
             const sortedWeeks = Object.keys(productionByWeek).sort();
-            const labels = sortedWeeks.map(weekStart => {
-                const start = new Date(weekStart);
-                const end = new Date(start);
-                end.setDate(end.getDate() + 6);
-                return `${start.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} ~ ${end.toLocaleDateString('ko-KR', { day: 'numeric' })}`;
+
+            // 레이블 생성: "12/01 주"
+            const labels = sortedWeeks.map(weekKey => {
+                const date = new Date(weekKey);
+                return `${date.getMonth() + 1}/${String(date.getDate()).padStart(2, '0')} 주`;
             });
+
+            // 주별 생산량 데이터
             const weeklyData = sortedWeeks.map(week => productionByWeek[week] || 0);
 
-            // 평균 계산: 단일 주간인 경우 서버 계산 평균 사용
-            let averageWeekly = 0;
-            if (sortedWeeks.length === 1) {
-                // 서버에서 계산된 30일 평균 사용 (일평균 * 7)
-                if (data.historical_summary && data.historical_summary.averages) {
-                    averageWeekly = (data.historical_summary.averages.daily_pcs || 0) * 7;
-                    console.log('[DEBUG] ✅ 서버 계산 주별 평균:', averageWeekly.toFixed(0));
-                } else if (data.historical_summary && data.historical_summary.daily_stats) {
-                    // 폴백: 요약 데이터에서 계산
-                    const dailyStats = data.historical_summary.daily_stats;
-                    const dailyAvg = dailyStats.reduce((sum, d) => sum + (d.pcs_completed || 0), 0) / dailyStats.length;
-                    averageWeekly = dailyAvg * 7;
-                    console.log('[DEBUG] 📊 요약 데이터 기반 주별 평균:', averageWeekly.toFixed(0));
-                }
-            } else {
-                // 다중 주간 선택 시: 선택된 기간의 평균 사용
-                const nonZeroWeeklyData = weeklyData.filter(val => val > 0);
-                averageWeekly = nonZeroWeeklyData.length > 0 ?
-                    nonZeroWeeklyData.reduce((sum, val) => sum + val, 0) / nonZeroWeeklyData.length :
-                    weeklyData.reduce((sum, val) => sum + val, 0) / weeklyData.length;
-            }
-            const avgData = new Array(weeklyData.length).fill(averageWeekly);
+            console.log('📊 [DEBUG] 차트 레이블:', labels);
+            console.log('📊 [DEBUG] 주별 생산량 데이터:', weeklyData);
 
-            const weeklyDatasets = [{
+            const datasets = [{
                 label: '주별 생산량 (PCS)',
                 data: weeklyData,
-                backgroundColor: 'var(--color-success)',
-                borderColor: 'var(--color-success)',
+                backgroundColor: 'var(--color-primary)',
+                borderColor: 'var(--color-primary)',
                 borderWidth: 1
             }];
 
-            // 평균이 0보다 클 때만 평균선 추가
-            if (averageWeekly > 0) {
-                weeklyDatasets.push({
-                    label: `주평균 (30일 기준, ${averageWeekly.toFixed(0)} PCS)`,
-                    data: avgData,
-                    type: 'line',
-                    borderColor: 'red',
-                    borderDash: [5, 5],
-                    fill: false,
-                    pointRadius: 0
-                });
-            }
+            chartData = {
+                labels: labels,
+                datasets: datasets
+            };
+
+            createChart('production-trend-chart', 'bar', chartData, chartOptions);
+            return;
+        } else if (isDateRangeMonthlyOrMore(dateRange)) {
+            // 분기 이상 (92일+): 월별 총 생산량
+            console.log('📊 [DEBUG] 월별 차트 경로 선택 (92일 이상)');
+
+            // 월별 총량 계산
+            const productionByMonth = {};
+
+            sessions.forEach(session => {
+                if (!session.start_time_dt && !session.date) return;
+                const date = new Date(session.start_time_dt || session.date);
+                const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+                if (!productionByMonth[monthKey]) {
+                    productionByMonth[monthKey] = 0;
+                }
+                productionByMonth[monthKey] += (session.pcs_completed || 0);
+            });
+
+            const sortedMonths = Object.keys(productionByMonth).sort();
+
+            // 레이블 생성: "2025년 12월"
+            const labels = sortedMonths.map(monthKey => {
+                const [year, month] = monthKey.split('-');
+                return `${year}년 ${parseInt(month)}월`;
+            });
+
+            // 월별 총 생산량 데이터
+            const monthlyData = sortedMonths.map(month => productionByMonth[month] || 0);
+
+            console.log('📊 [DEBUG] 차트 레이블:', labels);
+            console.log('📊 [DEBUG] 월별 총 생산량 데이터:', monthlyData);
+
+            const monthlyDatasets = [{
+                label: '월별 총 생산량 (PCS)',
+                data: monthlyData,
+                backgroundColor: 'var(--color-primary)',
+                borderColor: 'var(--color-primary)',
+                borderWidth: 1
+            }];
 
             chartData = {
                 labels: labels,
-                datasets: weeklyDatasets
+                datasets: monthlyDatasets
             };
+
+            // 월별 차트용 Y축 레이블 변경
+            chartOptions.scales.y.title.text = '총 생산량 (PCS)';
+
+            console.log('📊 [DEBUG] 월별 차트 데이터 최종:', chartData);
+            console.log('📊 [DEBUG] 차트 옵션:', chartOptions);
+
+            // 데이터 검증
+            if (!chartData || !chartData.labels || chartData.labels.length === 0) {
+                console.error('❌ [ERROR] 차트 데이터가 비어있습니다');
+                const chartContainer = document.getElementById('production-trend-chart').parentElement;
+                if (chartContainer) {
+                    chartContainer.innerHTML = '<p style="text-align: center; color: #666; padding: 40px;">월별 데이터가 없습니다.</p>';
+                }
+                return;
+            }
+
+            console.log('📊 [DEBUG] createChart 호출 직전...');
+            console.log('📊 [DEBUG] 차트 타입: bar');
+            console.log('📊 [DEBUG] 레이블 수:', chartData.labels.length);
+            console.log('📊 [DEBUG] 데이터셋 수:', chartData.datasets.length);
 
             // 막대 차트로 변경
             createChart('production-trend-chart', 'bar', chartData, chartOptions);
+
+            console.log('✅ [DEBUG] createChart 호출 완료');
             return;
         }
 
@@ -1055,11 +1447,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderWorkerDetailTab(pane, data) {
         // 기간 정보 가져오기
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const tabName = state.active_tab;
 
         pane.appendChild(createTabHeader(`${periodLabel} 작업자별 분석`));
         const content = document.createElement('div');
@@ -1071,6 +1464,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         content.innerHTML = `
+            <div class="card" style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="margin: 0;">📊 작업자별 분석</h4>
+                    ${createPeriodButtons(tabName)}
+                </div>
+            </div>
             <div class="worker-detail-layout">
                 <div class="worker-list-pane card">
                     <div class="filter-group">
@@ -1099,6 +1498,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         renderSortedWorkerList(data);
+
+        // 기간 필터 버튼 이벤트 리스너 연결
+        attachPeriodButtonListeners(content, tabName, () => fetchAnalysisData());
     }
     
     function renderSortedWorkerList(data) {
@@ -1219,34 +1621,29 @@ document.addEventListener('DOMContentLoaded', () => {
     function saveFiltersToStorage() {
         const filters = {
             process_mode: state.process_mode,
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value,
-            selected_workers: Array.from(elements.workerList.selectedOptions).map(opt => opt.value)
+            // 날짜는 저장하지 않음 - 페이지 로드 시 항상 전체 기간(6개월)이 기본값
+            // 작업자 선택 기능 비활성화됨
+            selected_workers: elements.workerList ? Array.from(elements.workerList.selectedOptions).map(opt => opt.value) : []
         };
         localStorage.setItem('dashboard_filters', JSON.stringify(filters));
     }
 
     function loadFiltersFromStorage() {
         const savedFilters = localStorage.getItem('dashboard_filters');
+
         if (savedFilters) {
             const filters = JSON.parse(savedFilters);
             state.process_mode = filters.process_mode || '이적실';
             document.querySelector(`input[name="process_mode"][value="${state.process_mode}"]`).checked = true;
-            elements.startDateInput.value = filters.start_date || today;
-            elements.endDateInput.value = filters.end_date || today;
+
             // workerList는 데이터 로드 후 채워지므로 여기서는 state만 업데이트
             state.selected_workers = filters.selected_workers || [];
         }
 
-        // 날짜 필드 초기화 (저장된 값이 없을 경우)
-        if (!elements.startDateInput.value) {
-            elements.startDateInput.value = today;
-            state.start_date = today;
-        }
-        if (!elements.endDateInput.value) {
-            elements.endDateInput.value = today;
-            state.end_date = today;
-        }
+        // 날짜는 항상 전체 기간(6개월)을 기본값으로 사용 (localStorage 무시)
+        // state.start_date와 state.end_date는 이미 state 정의에서 설정됨
+
+        console.log('📅 기본 날짜 범위 설정:', defaultStartDate, '~', today);
     }
 
     function renderWorkerDetails(workerName, data) {
@@ -1323,17 +1720,22 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderErrorLogTab(pane, data) {
         // 기간 정보 가져오기
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const tabName = state.active_tab;
+
+        console.log('🔍 [DEBUG] 오류 로그 탭 - filtered_raw_events:', data.filtered_raw_events?.length || 0);
 
         const errorEvents = (data.filtered_raw_events || []).filter(event =>
             event.event && (event.event.toLowerCase().includes('error') ||
             event.event.toLowerCase().includes('fail') ||
             event.event.toLowerCase().includes('cancel'))
         ).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        console.log('🔍 [DEBUG] 필터링된 오류 이벤트:', errorEvents.length);
 
         const exportButton = {
             text: 'CSV로 내보내기',
@@ -1345,14 +1747,30 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         pane.appendChild(createTabHeader(`${periodLabel} 오류 로그`, [exportButton]));
-        
+
         const content = document.createElement('div');
         pane.appendChild(content);
 
         if (errorEvents.length === 0) {
-            content.innerHTML = '<p>선택된 기간/작업자에 해당하는 오류 기록이 없습니다.</p>';
+            content.innerHTML = `
+                <div class="card" style="margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h4 style="margin: 0;">📊 오류 로그</h4>
+                        ${createPeriodButtons(tabName)}
+                    </div>
+                </div>
+                <p>선택된 기간/작업자에 해당하는 오류 기록이 없습니다.</p>`;
+            attachPeriodButtonListeners(content, tabName, () => fetchAnalysisData());
             return;
         }
+
+        content.innerHTML = `
+            <div class="card" style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="margin: 0;">📊 오류 로그</h4>
+                    ${createPeriodButtons(tabName)}
+                </div>
+            </div>`;
 
         const table = createTable(
             ['시간', '작업자', '오류 유형', '상세 정보'],
@@ -1367,22 +1785,32 @@ document.addEventListener('DOMContentLoaded', () => {
         container.className = 'table-container';
         container.appendChild(table);
         content.appendChild(container);
+
+        // 기간 필터 버튼 이벤트 리스너 연결
+        attachPeriodButtonListeners(content, tabName, () => fetchAnalysisData());
     }
 
     function renderTraceabilityTab(pane, data) {
         // 기간 정보 가져오기
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const tabName = state.active_tab;
 
         pane.appendChild(createTabHeader(`${periodLabel} 생산 이력 추적`));
         const content = document.createElement('div');
         pane.appendChild(content);
 
         content.innerHTML = `
+            <div class="card" style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="margin: 0;">📊 생산 이력 추적</h4>
+                    ${createPeriodButtons(tabName)}
+                </div>
+            </div>
             <div class="card">
                 <div class="trace-search-form">
                     <div class="form-group">
@@ -1421,6 +1849,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         performTraceSearch();
+
+        // 기간 필터 버튼 이벤트 리스너 연결
+        attachPeriodButtonListeners(content, tabName, () => fetchAnalysisData());
     }
 
     async function performTraceSearch() {
@@ -1525,13 +1956,20 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderFullDataTableTab(pane, data) {
         // 기간 정보 가져오기
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const tabName = state.active_tab;
 
-        const sessions = data.filtered_sessions_data;
+        // 최신순 정렬 (날짜 내림차순)
+        const sessions = [...(data.filtered_sessions_data || [])].sort((a, b) => {
+            const dateA = new Date(a.start_time_dt || a.date);
+            const dateB = new Date(b.start_time_dt || b.date);
+            return dateB - dateA;  // 최신순 (내림차순)
+        });
+
         const totalRows = sessions.length;
         const totalPages = Math.ceil(totalRows / state.detailed_data.rows_per_page);
         const currentPage = state.detailed_data.current_page;
@@ -1550,9 +1988,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         pane.appendChild(createTabHeader(`${periodLabel} 상세 데이터`, [exportButton]));
-        
+
         const content = document.createElement('div');
         pane.appendChild(content);
+
+        // 기간 필터 버튼 추가
+        const periodFilterCard = document.createElement('div');
+        periodFilterCard.className = 'card';
+        periodFilterCard.style.marginBottom = '20px';
+        periodFilterCard.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h4 style="margin: 0;">📊 상세 데이터</h4>
+                ${createPeriodButtons(tabName)}
+            </div>`;
+        content.appendChild(periodFilterCard);
 
         const table = createTable(
             ['날짜', '작업자', '공정', '품목', '작업시간', '완료수량', '오류'],
@@ -1604,16 +2053,20 @@ document.addEventListener('DOMContentLoaded', () => {
         paginationContainer.appendChild(pageInfo);
         paginationContainer.appendChild(nextButton);
         content.appendChild(paginationContainer);
+
+        // 기간 필터 버튼 이벤트 리스너 연결
+        attachPeriodButtonListeners(periodFilterCard, tabName, () => fetchAnalysisData());
     }
 
     function renderComparisonTab(pane, data) {
         // 기간 정보 가져오기
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const tabName = state.active_tab;
 
         if (!data.comparison_data) {
             pane.innerHTML = '<p>비교 데이터를 불러올 수 없습니다. 필터 조건을 확인해주세요.</p>';
@@ -1621,6 +2074,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         pane.innerHTML = `
+            <div class="card" style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="margin: 0;">📊 공정 비교 분석</h4>
+                    ${createPeriodButtons(tabName)}
+                </div>
+            </div>
             <div class="card">
                 <div class="tab-header">
                     <h3>${periodLabel} 전체 공정 비교 (검사 → 이적 → 포장)</h3>
@@ -1708,6 +2167,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         periodRadios.addEventListener('change', updateCharts);
         updateCharts();
+
+        // 기간 필터 버튼 이벤트 리스너 연결
+        attachPeriodButtonListeners(pane, tabName, () => fetchAnalysisData());
     }
     
     function renderComparisonChart(canvasId, label, sessions, period) {
@@ -1834,19 +2296,32 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderShippingDateTab(pane, data) {
         // 기간 정보 가져오기
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
         const isRealTime = isDateRangeRealTime(dateRange);
         const periodLabel = getPeriodLabel(dateRange, isRealTime);
+        const tabName = state.active_tab;
 
         pane.appendChild(createTabHeader(`${periodLabel} 출고일자별 생산량`));
         const content = document.createElement('div');
         pane.appendChild(content);
 
+        // 기간 필터 버튼 추가
+        const periodFilterCard = document.createElement('div');
+        periodFilterCard.className = 'card';
+        periodFilterCard.style.marginBottom = '20px';
+        periodFilterCard.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h4 style="margin: 0;">📊 출고일자별 분석</h4>
+                ${createPeriodButtons(tabName)}
+            </div>`;
+        content.appendChild(periodFilterCard);
+
         const sessions = data.filtered_sessions_data.filter(s => s.shipping_date);
         if (sessions.length === 0) {
-            content.innerHTML = '<p>표시할 출고일자 데이터가 없습니다.</p>';
+            content.innerHTML += '<p>표시할 출고일자 데이터가 없습니다.</p>';
+            attachPeriodButtonListeners(periodFilterCard, tabName, () => fetchAnalysisData());
             return;
         }
 
@@ -1880,6 +2355,9 @@ document.addEventListener('DOMContentLoaded', () => {
         container.className = 'table-container';
         container.appendChild(table);
         content.appendChild(container);
+
+        // 기간 필터 버튼 이벤트 리스너 연결
+        attachPeriodButtonListeners(periodFilterCard, tabName, () => fetchAnalysisData());
     }
 
     // ########################
@@ -1960,27 +2438,21 @@ document.addEventListener('DOMContentLoaded', () => {
             labels = realtimeData.hourly_production.labels;
             chartData = realtimeData.hourly_production.today;
             chartTitle = '시간별 생산량';
-        } else if (diffDays <= 7) {
-            // 주간: 일별
+        } else if (diffDays <= 31) {
+            // 2-31일: 일별 차트
             labels = generateDateLabels(startDate, endDate, 'day');
             chartData = generateAggregatedData(realtimeData, labels, 'day');
             chartTitle = '일별 생산량';
-        } else if (diffDays <= 31) {
-            // 월간: 일별 (너무 많으면 주별)
-            if (diffDays <= 14) {
-                labels = generateDateLabels(startDate, endDate, 'day');
-                chartData = generateAggregatedData(realtimeData, labels, 'day');
-                chartTitle = '일별 생산량';
-            } else {
-                labels = generateDateLabels(startDate, endDate, 'week');
-                chartData = generateAggregatedData(realtimeData, labels, 'week');
-                chartTitle = '주별 생산량';
-            }
-        } else {
-            // 분기: 주별
+        } else if (diffDays <= 91) {
+            // 32-91일: 주별 차트
             labels = generateDateLabels(startDate, endDate, 'week');
             chartData = generateAggregatedData(realtimeData, labels, 'week');
             chartTitle = '주별 생산량';
+        } else {
+            // 92일 이상: 월별 차트
+            labels = generateDateLabels(startDate, endDate, 'month');
+            chartData = generateAggregatedData(realtimeData, labels, 'month');
+            chartTitle = '월별 생산량';
         }
 
         return {
@@ -2045,8 +2517,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 날짜 범위 표시 추가
         const dateRange = {
-            start_date: elements.startDateInput.value,
-            end_date: elements.endDateInput.value
+            start_date: state.start_date,
+            end_date: state.end_date
         };
 
         if (dateRange.start_date && dateRange.end_date) {
@@ -2087,9 +2559,45 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function createChart(canvasId, type, data, options = {}) {
-        const ctx = document.getElementById(canvasId)?.getContext('2d');
-        if (!ctx) return;
-        if (state.charts[canvasId]) state.charts[canvasId].destroy();
+        console.log(`📊 [createChart] 호출됨 - canvasId: ${canvasId}, type: ${type}`);
+        console.log(`📊 [createChart] data:`, data);
+
+        // 데이터 유효성 검증
+        if (!data || !data.labels || !data.datasets) {
+            console.error(`❌ [createChart] 유효하지 않은 데이터:`, data);
+            return;
+        }
+
+        if (data.labels.length === 0) {
+            console.error(`❌ [createChart] 레이블이 비어있음`);
+            return;
+        }
+
+        if (data.datasets.length === 0) {
+            console.error(`❌ [createChart] 데이터셋이 비어있음`);
+            return;
+        }
+
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) {
+            console.error(`❌ [createChart] Canvas element를 찾을 수 없음: ${canvasId}`);
+            return;
+        }
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            console.error(`❌ [createChart] 2D context를 가져올 수 없음: ${canvasId}`);
+            return;
+        }
+
+        console.log(`✅ [createChart] Canvas element 찾음: ${canvasId}`);
+        console.log(`✅ [createChart] 레이블 수: ${data.labels.length}, 데이터셋 수: ${data.datasets.length}`);
+
+        if (state.charts[canvasId]) {
+            console.log(`🗑️ [createChart] 기존 차트 파괴: ${canvasId}`);
+            state.charts[canvasId].destroy();
+            delete state.charts[canvasId];
+        }
 
         // 기본 차트 옵션 설정
         const defaultOptions = {
@@ -2148,11 +2656,21 @@ document.addEventListener('DOMContentLoaded', () => {
         // 사용자 옵션과 기본 옵션 병합
         const mergedOptions = mergeDeep(defaultOptions, options);
 
-        state.charts[canvasId] = new Chart(ctx, {
-            type,
-            data,
-            options: mergedOptions
-        });
+        console.log(`📊 [createChart] Chart.js 객체 생성 중...`);
+        console.log(`📊 [createChart] Chart.js available:`, typeof Chart !== 'undefined');
+
+        try {
+            state.charts[canvasId] = new Chart(ctx, {
+                type,
+                data,
+                options: mergedOptions
+            });
+            console.log(`✅ [createChart] 차트 생성 성공: ${canvasId}`);
+            console.log(`📊 [createChart] 차트 객체:`, state.charts[canvasId]);
+        } catch (error) {
+            console.error(`❌ [createChart] 차트 생성 실패:`, error);
+            console.error(`❌ [createChart] 에러 스택:`, error.stack);
+        }
     }
 
     // 깊은 객체 병합 유틸리티 함수
@@ -2471,4 +2989,117 @@ document.addEventListener('DOMContentLoaded', () => {
         container.appendChild(pageInfo);
         container.appendChild(nextButton);
     }
+
+    // ########################
+    // ### 바코드 검색 기능 ###
+    // ########################
+    const barcodeInput = document.getElementById('barcode-input');
+    const searchBarcodeBtn = document.getElementById('search-barcode-btn');
+    const barcodeResult = document.getElementById('barcode-result');
+    const barcodeResultContent = document.getElementById('barcode-result-content');
+
+    async function searchBarcode() {
+        const barcode = barcodeInput.value.trim();
+
+        if (!barcode) {
+            showToast('바코드를 입력해주세요.');
+            return;
+        }
+
+        try {
+            // 로딩 표시
+            barcodeResult.style.display = 'block';
+            barcodeResultContent.innerHTML = '<p style="text-align: center;">검색 중...</p>';
+
+            const response = await fetch('/api/barcode_search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ barcode: barcode })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || !data.found) {
+                barcodeResultContent.innerHTML = `
+                    <p style="color: #e74c3c; font-weight: 600;">❌ 바코드를 찾을 수 없습니다</p>
+                    <p style="margin-top: 8px; color: #7f8c8d;">바코드: ${barcode}</p>
+                `;
+                return;
+            }
+
+            // 성공 응답 포맷팅
+            let html = `
+                <div style="margin-bottom: 16px;">
+                    <p style="color: #27ae60; font-weight: 600; font-size: 14px;">✅ 바코드 스캔 기록 찾았습니다!</p>
+                    <p style="margin-top: 8px; font-weight: 600;">바코드: ${data.barcode}</p>
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                    <p style="font-weight: 600; color: #2c3e50; margin-bottom: 6px;">📋 스캔 정보</p>
+                    <ul style="list-style: none; padding-left: 0; margin: 0;">
+                        <li>• 작업자: ${data.scan_info.worker}</li>
+                        <li>• 스캔 일시: ${data.scan_info.scan_time}</li>
+                        <li>• 공정: ${data.scan_info.process}</li>
+                        <li>• 상태: ${data.scan_info.status}</li>
+                        <li>• 스캔 간격: ${data.scan_info.interval_sec}초</li>
+                    </ul>
+                </div>
+            `;
+
+            if (data.tray_info) {
+                html += `
+                    <div style="margin-bottom: 12px;">
+                        <p style="font-weight: 600; color: #2c3e50; margin-bottom: 6px;">📦 트레이 완료 정보</p>
+                        <ul style="list-style: none; padding-left: 0; margin: 0;">
+                            <li>• 트레이 완료 시각: ${data.tray_info.complete_time}</li>
+                            <li>• 제품 코드: ${data.tray_info.item_code}</li>
+                            <li>• 트레이 용량: ${data.tray_info.tray_capacity}개</li>
+                            <li>• 스캔 개수: ${data.tray_info.scan_count}</li>
+                            <li>• 작업 시간: ${data.tray_info.work_time}</li>
+                            <li>• 해당 바코드 순서: ${data.tray_info.barcode_position}</li>
+                            <li>• 오류: ${data.tray_info.error_count}</li>
+                        </ul>
+                    </div>
+                `;
+
+                if (data.timeline) {
+                    html += `
+                        <div style="margin-bottom: 12px;">
+                            <p style="font-weight: 600; color: #2c3e50; margin-bottom: 6px;">⏱️ 작업 타임라인</p>
+                            <ul style="list-style: none; padding-left: 0; margin: 0;">
+                                <li>• 시작: ${data.timeline.start}</li>
+                                <li>• 해당 바코드 스캔: ${data.timeline.scan}</li>
+                                <li>• 완료: ${data.timeline.complete}</li>
+                            </ul>
+                        </div>
+                    `;
+                }
+            }
+
+            html += `
+                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #ddd;">
+                    <p style="font-size: 12px; color: #7f8c8d;">파일 위치: ${data.file_path}</p>
+                </div>
+            `;
+
+            barcodeResultContent.innerHTML = html;
+
+        } catch (error) {
+            console.error('바코드 검색 오류:', error);
+            barcodeResultContent.innerHTML = `
+                <p style="color: #e74c3c; font-weight: 600;">❌ 검색 중 오류가 발생했습니다</p>
+                <p style="margin-top: 8px; color: #7f8c8d; font-size: 12px;">${error.message}</p>
+            `;
+        }
+    }
+
+    // 검색 버튼 클릭 이벤트
+    searchBarcodeBtn.addEventListener('click', searchBarcode);
+
+    // 엔터 키로 검색
+    barcodeInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            searchBarcode();
+        }
+    });
 });

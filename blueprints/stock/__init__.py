@@ -177,6 +177,62 @@ def export_excel():
     )
 
 
+@stock_bp.route('/api/export-csv')
+def export_csv():
+    """CSV 내보내기"""
+    from io import StringIO
+    import csv
+
+    from_date = request.args.get('from_date')
+    to_date = request.args.get('to_date')
+    exclude_types = request.args.getlist('exclude_types')
+    warehouse = request.args.get('warehouse')
+    item_search = request.args.get('item_search')
+    export_type = request.args.get('type', 'ledger')
+
+    if not from_date or not to_date:
+        return jsonify({'error': '날짜를 입력해주세요'}), 400
+
+    if export_type == 'summary':
+        data = get_stock_summary(from_date, to_date, exclude_types, warehouse)
+        columns = ['item_code', 'item_name', 'total_in', 'total_out', 'transaction_count']
+        headers = ['품목코드', '품목명', '총입고', '총출고', '거래건수']
+        filename = f'재고요약_{from_date}_{to_date}.csv'
+    else:
+        data = get_stock_ledger(from_date, to_date, exclude_types, warehouse, item_search)
+        columns = ['date', 'item_code', 'item_name', 'warehouse', 'in_qty', 'out_qty', 'balance_qty', 'stock_entry_type_kr', 'voucher_no']
+        headers = ['일시', '품목코드', '품목명', '창고', '입고수량', '출고수량', '잔량', '유형', '전표번호']
+        filename = f'재고원장_{from_date}_{to_date}.csv'
+
+    output = StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+
+    # 헤더 작성
+    writer.writerow(headers)
+
+    # 데이터 작성
+    for row in data:
+        row_data = []
+        for col in columns:
+            value = row.get(col, '')
+            if col == 'date' and value:
+                value = value.strftime('%Y-%m-%d %H:%M:%S') if hasattr(value, 'strftime') else str(value)
+            row_data.append(value)
+        writer.writerow(row_data)
+
+    output.seek(0)
+
+    # UTF-8 BOM 추가 (Excel 한글 호환)
+    bom = '\ufeff'
+    csv_content = bom + output.getvalue()
+
+    return Response(
+        csv_content.encode('utf-8'),
+        mimetype='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{__import__('urllib.parse', fromlist=['quote']).quote(filename)}"}
+    )
+
+
 @stock_bp.route('/api/entry-types')
 def api_entry_types():
     """Stock Entry Type 목록 API"""

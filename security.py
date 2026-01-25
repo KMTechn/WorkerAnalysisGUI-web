@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 security.py - Flask Application Security Module
-보안 미들웨어, 입력 검증, Rate Limiting
+보안 미들웨어, 입력 검증, Rate Limiting, 접근 코드 인증
 """
 
 import os
@@ -10,10 +10,11 @@ import html
 import time
 import hashlib
 import secrets
+import string
 from functools import wraps
 from datetime import datetime, timedelta
 from collections import defaultdict
-from flask import request, jsonify, g
+from flask import request, jsonify, g, session, redirect, url_for, render_template_string
 import logging
 
 # 로깅 설정
@@ -38,6 +39,180 @@ def generate_secret_key():
         f.write(new_key)
     os.chmod(key_file, 0o600)  # 소유자만 읽기/쓰기
     return new_key
+
+
+# ============ Access Code Authentication ============
+
+ACCESS_CODE_FILE = '/root/WorkerAnalysisGUI-web/.access_code'
+
+def generate_access_code():
+    """6자리 랜덤 접근 코드 생성"""
+    return ''.join(secrets.choice(string.digits) for _ in range(6))
+
+
+def get_or_create_access_code():
+    """접근 코드 조회 또는 생성"""
+    if os.path.exists(ACCESS_CODE_FILE):
+        with open(ACCESS_CODE_FILE, 'r') as f:
+            code = f.read().strip()
+            if code:
+                return code
+    # 새 코드 생성 및 저장
+    new_code = generate_access_code()
+    with open(ACCESS_CODE_FILE, 'w') as f:
+        f.write(new_code)
+    os.chmod(ACCESS_CODE_FILE, 0o600)
+    security_logger.info(f"새 접근 코드 생성됨: {new_code}")
+    return new_code
+
+
+def verify_access_code(code: str) -> bool:
+    """접근 코드 검증"""
+    stored_code = get_or_create_access_code()
+    return secrets.compare_digest(code.strip(), stored_code)
+
+
+def is_authenticated() -> bool:
+    """세션 인증 상태 확인"""
+    return session.get('authenticated', False)
+
+
+# 인증 없이 접근 가능한 경로
+PUBLIC_PATHS = ['/login', '/static/']
+
+
+LOGIN_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>접근 코드 입력 - Worker Analysis</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        h1 {
+            color: #1a1a2e;
+            margin-bottom: 10px;
+            font-size: 1.8em;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 0.95em;
+        }
+        .input-group {
+            margin-bottom: 20px;
+        }
+        .input-group label {
+            display: block;
+            text-align: left;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        .code-input {
+            width: 100%;
+            padding: 15px;
+            font-size: 24px;
+            text-align: center;
+            letter-spacing: 8px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        .code-input:focus {
+            border-color: #4a90d9;
+        }
+        .code-input::placeholder {
+            letter-spacing: 2px;
+            font-size: 16px;
+        }
+        .btn-login {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #4a90d9 0%, #357abd 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(74, 144, 217, 0.4);
+        }
+        .error {
+            background: #ffe6e6;
+            color: #d63031;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+        }
+        .footer {
+            margin-top: 30px;
+            color: #999;
+            font-size: 0.85em;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Worker Analysis</h1>
+        <p class="subtitle">작업자 성과 분석 대시보드</p>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" action="/login">
+            <div class="input-group">
+                <label for="code">접근 코드</label>
+                <input type="password"
+                       id="code"
+                       name="code"
+                       class="code-input"
+                       maxlength="6"
+                       placeholder="6자리 코드"
+                       autocomplete="off"
+                       autofocus
+                       required>
+            </div>
+            <button type="submit" class="btn-login">접속하기</button>
+        </form>
+
+        <p class="footer">인가된 사용자만 접근 가능합니다</p>
+    </div>
+
+    <script>
+        // 숫자만 입력 허용
+        document.getElementById('code').addEventListener('input', function(e) {
+            this.value = this.value.replace(/[^0-9]/g, '');
+        });
+    </script>
+</body>
+</html>
+'''
 
 
 # ============ Input Validation ============
@@ -246,6 +421,15 @@ def security_check():
     """보안 검사 미들웨어 (before_request)"""
     client_ip = get_client_ip()
 
+    # 접근 코드 인증 체크 (공개 경로 제외)
+    is_public = any(request.path.startswith(p) for p in PUBLIC_PATHS)
+    if not is_public and not is_authenticated():
+        # API 요청은 401 반환
+        if request.path.startswith('/api/'):
+            return jsonify({"error": "Unauthorized. Please login first."}), 401
+        # 일반 페이지는 로그인으로 리다이렉트
+        return redirect(url_for('login'))
+
     # IP 차단 확인
     if rate_limiter.is_blocked(client_ip):
         security_logger.warning(f"차단된 IP 접근 시도: {client_ip}")
@@ -379,14 +563,46 @@ def setup_security(app):
     app.config['SECRET_KEY'] = generate_secret_key()
 
     # Session 보안 설정
-    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_SECURE'] = False  # HTTP에서도 동작하도록 (내부망)
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)  # 세션 유지 7일
+
+    # 로그인 라우트 등록
+    @app.route('/login', methods=['GET', 'POST'])
+    def login():
+        error = None
+        if request.method == 'POST':
+            code = request.form.get('code', '')
+            if verify_access_code(code):
+                session.permanent = True
+                session['authenticated'] = True
+                session['login_time'] = datetime.now().isoformat()
+                security_logger.info(f"로그인 성공: {get_client_ip()}")
+                # 원래 요청한 페이지로 리다이렉트
+                next_url = request.args.get('next', '/')
+                return redirect(next_url)
+            else:
+                error = "잘못된 접근 코드입니다"
+                security_logger.warning(f"로그인 실패: {get_client_ip()}")
+        return render_template_string(LOGIN_TEMPLATE, error=error)
+
+    @app.route('/logout')
+    def logout():
+        session.clear()
+        security_logger.info(f"로그아웃: {get_client_ip()}")
+        return redirect(url_for('login'))
 
     # 미들웨어 등록
     app.before_request(security_check)
     app.after_request(add_security_headers)
 
+    # 접근 코드 출력
+    access_code = get_or_create_access_code()
     security_logger.info("Flask 보안 모듈 초기화 완료")
+    print(f"\n{'='*50}")
+    print(f"  접근 코드: {access_code}")
+    print(f"  (이 코드로 로그인해야 대시보드에 접근할 수 있습니다)")
+    print(f"{'='*50}\n")
 
     return app

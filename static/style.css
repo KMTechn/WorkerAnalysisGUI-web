@@ -438,9 +438,11 @@ input[type="date"]:focus, select:focus {
     gap: 0.25rem;
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+    align-items: center;
 }
 .tab-btn {
-    padding: 0.75rem 1.25rem;
+    padding: 0.75rem 1rem;
     border: none;
     background: none;
     cursor: pointer;
@@ -448,6 +450,8 @@ input[type="date"]:focus, select:focus {
     font-weight: 500;
     color: var(--text-muted);
     transition: all 0.2s ease;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 .tab-btn.active {
     color: var(--color-primary);
@@ -503,18 +507,27 @@ input[type="date"]:focus, select:focus {
 /* --- 테이블 (Tables) --- */
 .table-container {
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 .data-table {
     width: 100%;
     border-collapse: collapse;
     text-align: left;
+    table-layout: auto;
+    min-width: 600px;
 }
 .data-table th, .data-table td {
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
 }
 .data-table th {
     position: relative;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+.data-table td {
+    font-size: 0.9rem;
 }
 
 .resize-handle {
@@ -867,7 +880,7 @@ input[type="date"]:focus, select:focus {
     background: #555;
 }
 /* ===========================================
-   모바일 반응형 디자인
+   반응형 디자인 (Responsive Design)
    =========================================== */
 
 /* 모바일 메뉴 버튼 - 기본 숨김 */
@@ -878,6 +891,119 @@ input[type="date"]:focus, select:focus {
 /* 사이드바 오버레이 - 기본 숨김 */
 .sidebar-overlay {
     display: none;
+}
+
+/* ========================================
+   데스크탑 (1024px 이상) - 기본 스타일
+   ======================================== */
+@media screen and (min-width: 1025px) {
+    .main-content {
+        padding: 2rem;
+    }
+
+    .kpi-grid {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1.25rem;
+    }
+
+    .chart-container {
+        height: 350px;
+    }
+
+    .data-table th,
+    .data-table td {
+        padding: 0.875rem 1.25rem;
+        font-size: 0.9rem;
+    }
+
+    .comparison-charts-layout {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* ========================================
+   태블릿 (769px ~ 1024px)
+   ======================================== */
+@media screen and (min-width: 769px) and (max-width: 1024px) {
+    .container {
+        height: calc(100vh - 40px);
+    }
+
+    .sidebar {
+        width: 240px;
+        padding: 1.25rem;
+    }
+
+    .main-content {
+        padding: 1.25rem;
+    }
+
+    .kpi-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+    }
+
+    .kpi-grid .card {
+        padding: 1.25rem;
+    }
+
+    .card-title {
+        font-size: 0.8rem;
+    }
+
+    .card-value {
+        font-size: 1.5rem;
+    }
+
+    .chart-container {
+        height: 280px;
+        padding: 1rem;
+    }
+
+    .chart-container h4 {
+        font-size: 0.9rem;
+    }
+
+    .data-table {
+        min-width: 550px;
+        font-size: 0.85rem;
+    }
+
+    .data-table th,
+    .data-table td {
+        padding: 0.625rem 0.875rem;
+    }
+
+    .worker-detail-layout {
+        grid-template-columns: 200px 1fr;
+        gap: 1rem;
+    }
+
+    .worker-charts-layout {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+
+    .comparison-charts-layout {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+    }
+
+    .tabs {
+        gap: 0.25rem;
+        flex-wrap: wrap;
+    }
+
+    .tab-btn {
+        padding: 0.625rem 1rem;
+        font-size: 0.85rem;
+    }
+
+    /* 태블릿 테이블 스크롤 개선 */
+    .table-container {
+        margin: 0 -0.5rem;
+        padding: 0 0.5rem;
+    }
 }
 
 /* ========================================
