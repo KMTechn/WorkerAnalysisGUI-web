@@ -234,7 +234,7 @@ def demo_index():
         warehouses=warehouses,
         default_from=default_from,
         default_to=default_to,
-        default_exclude=['Disassemble', 'Material Transfer'],
+        default_exclude=[],
         stock_entry_types=entry_types,
         demo_mode=True
     )

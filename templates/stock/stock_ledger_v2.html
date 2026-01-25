@@ -7,6 +7,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         :root {
@@ -976,7 +977,7 @@
 
         <!-- KPI 카드 -->
         <div class="row g-3 mb-4">
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md">
                 <div class="kpi-card">
                     <div class="icon">📥</div>
                     <div class="value positive" id="kpiTotalIn">-</div>
@@ -984,7 +985,7 @@
                     <div class="change up" id="kpiInChange">-</div>
                 </div>
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md">
                 <div class="kpi-card">
                     <div class="icon">📤</div>
                     <div class="value negative" id="kpiTotalOut">-</div>
@@ -992,7 +993,15 @@
                     <div class="change down" id="kpiOutChange">-</div>
                 </div>
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md">
+                <div class="kpi-card">
+                    <div class="icon">🔧</div>
+                    <div class="value" id="kpiDisassemble" style="color: #7c3aed;">-</div>
+                    <div class="label">해체 수량</div>
+                    <div class="change">별도 처리</div>
+                </div>
+            </div>
+            <div class="col-6 col-md">
                 <div class="kpi-card">
                     <div class="icon">📊</div>
                     <div class="value" id="kpiNetChange">-</div>
@@ -1000,7 +1009,7 @@
                     <div class="change" id="kpiNetChangePercent">-</div>
                 </div>
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md">
                 <div class="kpi-card">
                     <div class="icon">📋</div>
                     <div class="value" id="kpiTransactions">-</div>
@@ -1108,6 +1117,7 @@
                                         <th>창고</th>
                                         <th class="text-end sortable" data-sort="in_qty" onclick="sortLedger('in_qty')">입고</th>
                                         <th class="text-end sortable" data-sort="out_qty" onclick="sortLedger('out_qty')">출고</th>
+                                        <th class="text-end" style="color: #7c3aed;">해체</th>
                                         <th class="text-end sortable" data-sort="balance_qty" onclick="sortLedger('balance_qty')">잔량</th>
                                         <th>유형</th>
                                         <th>전표번호</th>
@@ -1160,8 +1170,9 @@
             <!-- 현재 재고 탭 -->
             <div class="tab-pane fade" id="currentStockTab">
                 <div class="row g-3">
+                    <!-- 좌측: 필터 + 현재 재고 현황 -->
                     <div class="col-md-4">
-                        <div class="filter-card">
+                        <div class="filter-card mb-3">
                             <h6><i class="bi bi-funnel me-2"></i>재고 필터</h6>
                             <select id="stockWarehouse" class="form-select form-select-sm mb-2" onchange="loadCurrentStock()">
                                 <option value="">전체 창고</option>
@@ -1172,15 +1183,22 @@
                             <input type="text" id="stockItemSearch" class="form-control form-control-sm"
                                    placeholder="품목 검색..." onkeyup="filterCurrentStock()">
                         </div>
-                    </div>
-                    <div class="col-md-8">
                         <div class="data-card">
                             <div class="card-header">
                                 <span class="title"><i class="bi bi-box me-2"></i>현재 재고 현황</span>
                                 <span class="badge" id="stockCount">0건</span>
                             </div>
-                            <div class="p-3" id="currentStockList" style="max-height: 500px; overflow-y: auto;">
+                            <div class="p-3" id="currentStockList" style="max-height: 450px; overflow-y: auto;">
                                 <div class="text-center text-muted py-4">데이터 로딩 중...</div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 우측: 창고별 품목 그래프 -->
+                    <div class="col-md-8">
+                        <div class="chart-card" style="height: 100%;">
+                            <h6><i class="bi bi-bar-chart-fill me-2"></i>창고별 품목 분포</h6>
+                            <div class="chart-container" style="height: 500px;">
+                                <canvas id="warehouseItemChart"></canvas>
                             </div>
                         </div>
                     </div>
@@ -1577,6 +1595,7 @@
 
             state.currentStockData = result.data || [];
             renderCurrentStock();
+            updateWarehouseItemChart();
             document.getElementById('stockCount').textContent = result.count + '건';
         }
 
@@ -1629,7 +1648,7 @@
             if (state.ledgerData.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="9" class="text-center text-muted py-5">
+                        <td colspan="10" class="text-center text-muted py-5">
                             <i class="bi bi-inbox fs-1 d-block mb-2"></i>
                             조회된 데이터가 없습니다.<br>
                             <small>필터 조건을 변경해 보세요.</small>
@@ -1643,13 +1662,16 @@
             state.ledgerData.slice(0, 200).forEach(row => {
                 const tr = document.createElement('tr');
                 tr.onclick = () => showItemModal(row.item_code, row.item_name);
+                // 해체 수량 계산 (출고 or 입고 중 값이 있는 것)
+                const disassembleQty = (row.disassemble_out_qty || 0) + (row.disassemble_in_qty || 0);
                 tr.innerHTML = `
                     <td>${formatDate(row.date)}</td>
-                    <td><code>${row.item_code}</code></td>
+                    <td><code>${row.base_item_code || row.item_code}</code></td>
                     <td>${row.item_name || ''}</td>
                     <td><small>${row.warehouse || ''}</small></td>
                     <td class="text-end qty-in">${row.in_qty ? row.in_qty.toLocaleString() : ''}</td>
                     <td class="text-end qty-out">${row.out_qty ? row.out_qty.toLocaleString() : ''}</td>
+                    <td class="text-end" style="color: #7c3aed; font-weight: 600;">${disassembleQty ? disassembleQty.toLocaleString() : ''}</td>
                     <td class="text-end">${row.balance_qty ? row.balance_qty.toLocaleString() : ''}</td>
                     <td>${getTypeBadge(row.stock_entry_type_kr, row.stock_entry_type)}</td>
                     <td><small class="text-muted">${row.voucher_no || ''}</small></td>
@@ -1716,10 +1738,11 @@
 
             container.innerHTML = filtered.map(item => {
                 const qtyClass = item.current_qty < 100 ? 'critical' : item.current_qty < 500 ? 'low' : '';
+                const displayCode = item.item_code.replace(/_UNPACK$/, '').replace(/_REPACK$/, '');
                 return `
                     <div class="stock-card" onclick="showItemModal('${item.item_code}', '${item.item_name}')">
                         <div class="item-info">
-                            <h6><code>${item.item_code}</code></h6>
+                            <h6><code>${displayCode}</code></h6>
                             <small>${item.item_name || ''}</small>
                             <br><small class="text-muted">${item.warehouse}</small>
                         </div>
@@ -1760,11 +1783,12 @@
 
         // ========== KPI 업데이트 ==========
         function updateKPIs() {
-            let totalIn = 0, totalOut = 0;
+            let totalIn = 0, totalOut = 0, totalDisassemble = 0;
 
             state.ledgerData.forEach(row => {
                 totalIn += row.in_qty || 0;
                 totalOut += row.out_qty || 0;
+                totalDisassemble += (row.disassemble_out_qty || 0) + (row.disassemble_in_qty || 0);
             });
 
             const netChange = totalIn - totalOut;
@@ -1776,6 +1800,12 @@
             document.getElementById('kpiNetChange').className = 'value ' + (netChange >= 0 ? 'positive' : 'negative');
             document.getElementById('kpiTransactions').textContent = state.ledgerData.length.toLocaleString();
             document.getElementById('kpiItemCount').textContent = state.summaryData.length + '개 품목';
+
+            // 해체 수량 표시
+            const kpiDisassemble = document.getElementById('kpiDisassemble');
+            if (kpiDisassemble) {
+                kpiDisassemble.textContent = totalDisassemble.toLocaleString();
+            }
 
             // 트렌드 화살표 추가
             const inChange = document.getElementById('kpiInChange');
@@ -1812,14 +1842,16 @@
             const monthlyData = {};
             state.ledgerData.forEach(row => {
                 const month = row.date ? row.date.substring(0, 7) : 'Unknown';
-                if (!monthlyData[month]) monthlyData[month] = { in: 0, out: 0 };
+                if (!monthlyData[month]) monthlyData[month] = { in: 0, out: 0, disassemble: 0 };
                 monthlyData[month].in += row.in_qty || 0;
                 monthlyData[month].out += row.out_qty || 0;
+                monthlyData[month].disassemble += (row.disassemble_out_qty || 0) + (row.disassemble_in_qty || 0);
             });
 
             const labels = Object.keys(monthlyData).sort().slice(-6);
             const inData = labels.map(m => monthlyData[m]?.in || 0);
             const outData = labels.map(m => monthlyData[m]?.out || 0);
+            const disassembleData = labels.map(m => monthlyData[m]?.disassemble || 0);
 
             if (state.charts.monthly) state.charts.monthly.destroy();
 
@@ -1829,7 +1861,8 @@
                     labels: labels,
                     datasets: [
                         { label: '입고', data: inData, backgroundColor: 'rgba(39, 174, 96, 0.7)' },
-                        { label: '출고', data: outData, backgroundColor: 'rgba(231, 76, 60, 0.7)' }
+                        { label: '출고', data: outData, backgroundColor: 'rgba(231, 76, 60, 0.7)' },
+                        { label: '해체', data: disassembleData, backgroundColor: 'rgba(124, 58, 237, 0.7)' }
                     ]
                 },
                 options: {
@@ -1876,6 +1909,152 @@
             });
         }
 
+        function updateWarehouseItemChart() {
+            const ctx = document.getElementById('warehouseItemChart');
+            if (!ctx) return;
+
+            const selectedWarehouse = document.getElementById('stockWarehouse')?.value || '';
+
+            if (state.charts.warehouseItem) state.charts.warehouseItem.destroy();
+
+            if (!selectedWarehouse) {
+                // 전체 창고: 창고별 전체 수량 (TEST 제외)
+                const warehouseTotal = {};
+
+                state.currentStockData.forEach(row => {
+                    const wh = row.warehouse || 'Unknown';
+                    // 창고명에서 앞부분 추출 (예: "입고창고 - K" -> "입고창고")
+                    const whName = wh.split(' - ')[0].trim();
+
+                    // TEST 제외
+                    if (whName.toUpperCase().includes('TEST')) return;
+
+                    warehouseTotal[whName] = (warehouseTotal[whName] || 0) + (row.current_qty || 0);
+                });
+
+                const labels = Object.keys(warehouseTotal);
+                const data = labels.map(wh => warehouseTotal[wh] || 0);
+                const colors = {
+                    '입고창고': '#3498db',
+                    '해체실': '#9b59b6',
+                    '불량창고': '#e74c3c',
+                    '출고대기': '#27ae60'
+                };
+
+                state.charts.warehouseItem = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: '재고량',
+                            data: data,
+                            backgroundColor: labels.map(l => colors[l] || '#95a5a6'),
+                            borderColor: '#fff',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return `재고량: ${context.raw.toLocaleString()}`;
+                                    }
+                                }
+                            },
+                            datalabels: {
+                                anchor: 'end',
+                                align: 'top',
+                                color: '#333',
+                                font: { weight: 'bold', size: 12 },
+                                formatter: function(value) {
+                                    return value.toLocaleString();
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { ticks: { font: { size: 12 } } },
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: '재고량', font: { size: 11 } }
+                            }
+                        }
+                    },
+                    plugins: [ChartDataLabels]
+                });
+            } else {
+                // 특정 창고 선택: 품목별 재고량
+                const itemQty = {};
+                state.currentStockData.forEach(row => {
+                    // _UNPACK, _REPACK 접미사 제거
+                    const itemCode = (row.item_code || 'Unknown').replace(/_UNPACK$/, '').replace(/_REPACK$/, '');
+                    itemQty[itemCode] = (itemQty[itemCode] || 0) + (row.current_qty || 0);
+                });
+
+                const items = Object.keys(itemQty);
+                const data = items.map(item => itemQty[item]);
+
+                const colors = [
+                    '#3498db', '#27ae60', '#f39c12', '#e74c3c', '#9b59b6',
+                    '#1abc9c', '#e67e22', '#2980b9', '#16a085', '#c0392b'
+                ];
+
+                state.charts.warehouseItem = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: items,
+                        datasets: [{
+                            label: '재고량',
+                            data: data,
+                            backgroundColor: items.map((_, i) => colors[i % colors.length]),
+                            borderColor: '#fff',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return `재고량: ${context.raw.toLocaleString()}`;
+                                    }
+                                }
+                            },
+                            datalabels: {
+                                anchor: 'end',
+                                align: 'top',
+                                color: '#333',
+                                font: { weight: 'bold', size: 11 },
+                                formatter: function(value) {
+                                    return value.toLocaleString();
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    font: { size: 11 },
+                                    maxRotation: 0,
+                                    minRotation: 0
+                                }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: '재고량', font: { size: 11 } }
+                            }
+                        }
+                    },
+                    plugins: [ChartDataLabels]
+                });
+            }
+        }
+
         function updateTopItemsChart() {
             const ctx = document.getElementById('topItemsChart');
             if (!ctx) return;
@@ -1884,6 +2063,7 @@
             const labels = top5.map(r => r.item_code);
             const inData = top5.map(r => r.total_in || 0);
             const outData = top5.map(r => r.total_out || 0);
+            const disassembleData = top5.map(r => (r.total_disassemble_out || 0) + (r.total_disassemble_in || 0));
 
             if (state.charts.topItems) state.charts.topItems.destroy();
 
@@ -1893,7 +2073,8 @@
                     labels: labels,
                     datasets: [
                         { label: '입고', data: inData, backgroundColor: 'rgba(39, 174, 96, 0.7)' },
-                        { label: '출고', data: outData, backgroundColor: 'rgba(231, 76, 60, 0.7)' }
+                        { label: '출고', data: outData, backgroundColor: 'rgba(231, 76, 60, 0.7)' },
+                        { label: '해체', data: disassembleData, backgroundColor: 'rgba(124, 58, 237, 0.7)' }
                     ]
                 },
                 options: {

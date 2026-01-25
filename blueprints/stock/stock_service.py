@@ -29,7 +29,7 @@ STOCK_ENTRY_TYPES = {
 }
 
 # 기본 제외 유형 (해체, 이동)
-DEFAULT_EXCLUDE_TYPES = ['Disassemble', 'Material Transfer']
+DEFAULT_EXCLUDE_TYPES = []
 
 
 def format_number(value):
@@ -79,7 +79,7 @@ def get_stock_entry_types():
 
 
 def get_warehouses():
-    """창고 목록 조회"""
+    """창고 목록 조회 (TEST 제외, 순서: 입고 -> 해체 -> 출고대기 -> 불량)"""
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
@@ -87,9 +87,23 @@ def get_warehouses():
                 SELECT name, warehouse_name
                 FROM `tabWarehouse`
                 WHERE disabled = 0 AND is_group = 0
+                  AND warehouse_name NOT LIKE '%TEST%'
+                  AND name NOT LIKE '%TEST%'
                 ORDER BY warehouse_name
             """)
-            return cursor.fetchall()
+            results = cursor.fetchall()
+
+            # 순서 정의: 입고 -> 해체 -> 출고대기 -> 불량
+            order_priority = {'입고': 1, '해체': 2, '출고대기': 3, '불량': 4}
+
+            def get_priority(wh):
+                name = wh.get('warehouse_name', '') or wh.get('name', '')
+                for key, priority in order_priority.items():
+                    if key in name:
+                        return priority
+                return 99
+
+            return sorted(results, key=get_priority)
     finally:
         conn.close()
 
@@ -113,7 +127,8 @@ def get_items():
 
 def get_stock_ledger(from_date, to_date, exclude_types=None, warehouse=None, item_search=None):
     """
-    재고 원장 데이터 조회
+    재고 원장 데이터 조회 (같은 품목/시간/창고/유형은 합산)
+    해체는 입고/출고와 별도로 분류
 
     Args:
         from_date: 시작일 (YYYY-MM-DD)
@@ -137,21 +152,32 @@ def get_stock_ledger(from_date, to_date, exclude_types=None, warehouse=None, ite
                     sle.item_code,
                     i.item_name,
                     sle.warehouse,
-                    CASE
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' THEN 0
                         WHEN sle.actual_qty > 0 THEN sle.actual_qty
                         ELSE 0
-                    END as in_qty,
-                    CASE
+                    END) as in_qty,
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' THEN 0
                         WHEN sle.actual_qty < 0 THEN ABS(sle.actual_qty)
                         ELSE 0
-                    END as out_qty,
-                    sle.qty_after_transaction as balance_qty,
-                    sle.valuation_rate,
-                    sle.stock_value,
+                    END) as out_qty,
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' AND sle.actual_qty < 0 THEN ABS(sle.actual_qty)
+                        ELSE 0
+                    END) as disassemble_out_qty,
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' AND sle.actual_qty > 0 THEN sle.actual_qty
+                        ELSE 0
+                    END) as disassemble_in_qty,
+                    MAX(sle.qty_after_transaction) as balance_qty,
+                    AVG(sle.valuation_rate) as valuation_rate,
+                    SUM(sle.stock_value) as stock_value,
                     sle.voucher_type,
                     sle.voucher_no,
                     se.stock_entry_type,
-                    se.purpose
+                    se.purpose,
+                    COUNT(*) as item_count
                 FROM `tabStock Ledger Entry` sle
                 LEFT JOIN `tabStock Entry` se
                     ON sle.voucher_no = se.name AND sle.voucher_type = 'Stock Entry'
@@ -181,13 +207,18 @@ def get_stock_ledger(from_date, to_date, exclude_types=None, warehouse=None, ite
                 search_pattern = f"%{item_search}%"
                 params.extend([search_pattern, search_pattern])
 
-            query += " ORDER BY sle.posting_datetime DESC, sle.creation DESC"
+            # 같은 품목, 시간, 창고, 전표번호, 유형별로 그룹화
+            query += """ GROUP BY sle.posting_datetime, sle.item_code, i.item_name,
+                         sle.warehouse, sle.voucher_type, sle.voucher_no,
+                         se.stock_entry_type, se.purpose"""
+            query += " ORDER BY sle.posting_datetime DESC"
 
             cursor.execute(query, params)
             results = cursor.fetchall()
 
             for row in results:
-                for field in ['in_qty', 'out_qty', 'balance_qty', 'valuation_rate', 'stock_value']:
+                for field in ['in_qty', 'out_qty', 'balance_qty', 'valuation_rate', 'stock_value',
+                              'disassemble_out_qty', 'disassemble_in_qty']:
                     if field in row:
                         row[field] = format_number(row[field])
 
@@ -207,7 +238,7 @@ def get_stock_ledger(from_date, to_date, exclude_types=None, warehouse=None, ite
 
 def get_stock_summary(from_date, to_date, exclude_types=None, warehouse=None):
     """
-    품목별 재고 요약 조회
+    품목별 재고 요약 조회 (해체는 입출고와 별도 분리)
     """
     if exclude_types is None:
         exclude_types = []
@@ -219,8 +250,24 @@ def get_stock_summary(from_date, to_date, exclude_types=None, warehouse=None):
                 SELECT
                     REPLACE(REPLACE(sle.item_code, '_UNPACK', ''), '_REPACK', '') as item_code,
                     i.item_name,
-                    SUM(CASE WHEN sle.actual_qty > 0 THEN sle.actual_qty ELSE 0 END) as total_in,
-                    SUM(CASE WHEN sle.actual_qty < 0 THEN ABS(sle.actual_qty) ELSE 0 END) as total_out,
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' THEN 0
+                        WHEN sle.actual_qty > 0 THEN sle.actual_qty
+                        ELSE 0
+                    END) as total_in,
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' THEN 0
+                        WHEN sle.actual_qty < 0 THEN ABS(sle.actual_qty)
+                        ELSE 0
+                    END) as total_out,
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' AND sle.actual_qty < 0 THEN ABS(sle.actual_qty)
+                        ELSE 0
+                    END) as total_disassemble_out,
+                    SUM(CASE
+                        WHEN se.stock_entry_type = 'Disassemble' AND sle.actual_qty > 0 THEN sle.actual_qty
+                        ELSE 0
+                    END) as total_disassemble_in,
                     COUNT(*) as transaction_count
                 FROM `tabStock Ledger Entry` sle
                 LEFT JOIN `tabStock Entry` se
@@ -252,7 +299,7 @@ def get_stock_summary(from_date, to_date, exclude_types=None, warehouse=None):
             results = cursor.fetchall()
 
             for row in results:
-                for field in ['total_in', 'total_out']:
+                for field in ['total_in', 'total_out', 'total_disassemble_out', 'total_disassemble_in']:
                     if field in row:
                         row[field] = format_number(row[field])
 
@@ -293,6 +340,13 @@ def get_current_stock(warehouse=None, item_code=None):
             query += " ORDER BY b.item_code, b.warehouse"
 
             cursor.execute(query, params)
-            return cursor.fetchall()
+            results = cursor.fetchall()
+
+            for row in results:
+                for field in ['current_qty', 'valuation_rate', 'stock_value']:
+                    if field in row:
+                        row[field] = format_number(row[field])
+
+            return results
     finally:
         conn.close()
