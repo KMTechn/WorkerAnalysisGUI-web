@@ -1,5 +1,51 @@
 // 향상된 버전 - 차트 + 기간 필터 추가
-console.log('🚀 향상된 버전 로드');
+// ============ 디버그 설정 ============
+const DEBUG = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+// 환경에 따른 로깅 함수
+const log = {
+    debug: function(msg, ...args) { if (DEBUG) console.log(msg, ...args); },
+    info: function(msg, ...args) { console.log(msg, ...args); },
+    warn: function(msg, ...args) { console.warn(msg, ...args); },
+    error: function(msg, ...args) { console.error(msg, ...args); }
+};
+
+log.debug('🚀 향상된 버전 로드 (DEBUG 모드:', DEBUG, ')');
+
+// ============ 차트 인스턴스 관리 (메모리 누수 방지) ============
+const chartInstances = {};
+
+function destroyChart(chartId) {
+    if (chartInstances[chartId]) {
+        chartInstances[chartId].destroy();
+        delete chartInstances[chartId];
+        log.debug('차트 삭제:', chartId);
+    }
+}
+
+function createChart(chartId, type, data, options) {
+    // 기존 차트 인스턴스 정리
+    destroyChart(chartId);
+
+    const canvas = document.getElementById(chartId);
+    if (!canvas) {
+        log.warn('차트 캔버스를 찾을 수 없음:', chartId);
+        return null;
+    }
+
+    const ctx = canvas.getContext('2d');
+    chartInstances[chartId] = new Chart(ctx, { type, data, options });
+    log.debug('차트 생성:', chartId);
+    return chartInstances[chartId];
+}
+
+function destroyAllCharts() {
+    Object.keys(chartInstances).forEach(destroyChart);
+    log.debug('모든 차트 삭제 완료');
+}
+
+// 페이지 언로드 시 차트 정리
+window.addEventListener('beforeunload', destroyAllCharts);
 
 // XSS 방지용 HTML 이스케이프 함수
 function escapeHtml(text) {
@@ -10,7 +56,7 @@ function escapeHtml(text) {
 }
 
 window.onerror = function(message, source, lineno, colno, error) {
-    console.error('전역 에러:', message, error);
+    log.error('전역 에러:', message, error);
     const errorDiv = document.createElement('div');
     errorDiv.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#dc3545;color:white;padding:15px 30px;border-radius:8px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
     errorDiv.innerHTML = '<strong>⚠️ 에러:</strong> ' + escapeHtml(message) + ' (라인: ' + escapeHtml(lineno) + ')';
@@ -20,7 +66,7 @@ window.onerror = function(message, source, lineno, colno, error) {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('✅ DOMContentLoaded');
+    log.debug('✅ DOMContentLoaded');
 
     const elements = {
         loadingOverlay: document.getElementById('loading-overlay'),
@@ -47,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadData() {
-        console.log('📡 데이터 로딩 시작...');
+        log.debug('📡 데이터 로딩 시작...');
         elements.loadingOverlay.classList.remove('hidden');
 
         try {
@@ -66,7 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error('API 오류: ' + response.status);
 
             const data = await response.json();
-            console.log('✅ 데이터 수신:', {
+            log.debug('✅ 데이터 수신:', {
                 kpis: Object.keys(data.kpis || {}).length,
                 workers: data.workers?.length || 0,
                 sessions: data.filtered_sessions_data?.length || 0
@@ -76,7 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderDashboard(data);
 
         } catch (error) {
-            console.error('❌ 데이터 로딩 실패:', error);
+            log.error('❌ 데이터 로딩 실패:', error);
             elements.tabContentContainer.innerHTML = `
                 <div style="padding: 40px; text-align: center;">
                     <h2 style="color: red;">❌ 데이터 로딩 실패</h2>
@@ -90,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderDashboard(data) {
-        console.log('📊 대시보드 렌더링 시작...');
+        log.debug('📊 대시보드 렌더링 시작...');
 
         // 제목
         const dateRange = `${state.start_date} ~ ${state.end_date}`;
@@ -214,7 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.start_date = getDateDaysAgo(days);
                 state.end_date = new Date().toISOString().split('T')[0];
             }
-            console.log('🔘 기간 필터:', this.options[this.selectedIndex].text, '→', state.start_date, '~', state.end_date);
+            log.debug('🔘 기간 필터:', this.options[this.selectedIndex].text, '→', state.start_date, '~', state.end_date);
             loadData();
         };
 
@@ -246,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 패널 숨기기
                 document.getElementById('custom-date-panel').style.display = 'none';
 
-                console.log('📅 커스텀 기간:', state.start_date, '~', state.end_date);
+                log.debug('📅 커스텀 기간:', state.start_date, '~', state.end_date);
                 loadData();
             };
 
@@ -262,13 +308,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 기본 탭 표시
         renderTab(state.active_tab, data);
-        console.log('✅ 대시보드 렌더링 완료');
+        log.debug('✅ 대시보드 렌더링 완료');
     }
 
     function renderTab(tabName, data) {
-        console.log('🔄 탭 렌더링:', tabName);
+        log.debug('🔄 탭 렌더링:', tabName);
 
-        // 기존 차트 파괴
+        // 기존 차트 파괴 (메모리 누수 방지)
+        destroyAllCharts();
         Object.values(state.charts).forEach(function(chart) {
             if (chart && chart.destroy) chart.destroy();
         });
@@ -601,9 +648,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(function() {
                     loadWorkerDetail(workerName, detailId, function(hourlyData) {
                         // 항상 detailId 저장 (데이터 없어도)
-                        console.log('📥 [' + detailId + '] 받은 hourlyData:', hourlyData);
+                        log.debug('📥 [' + detailId + '] 받은 hourlyData:', hourlyData);
                         window.workerHourlyDataStore[detailId] = hourlyData || { labels: [], values: [] };
-                        console.log('📥 [' + detailId + '] 저장된 데이터:', JSON.stringify(window.workerHourlyDataStore[detailId]).substring(0, 150));
+                        log.debug('📥 [' + detailId + '] 저장된 데이터:', JSON.stringify(window.workerHourlyDataStore[detailId]).substring(0, 150));
 
                         // 시간 범위 업데이트 (7시 이전이나 20시 이후 작업 있으면 확장)
                         if (hourlyData && hourlyData.values && hourlyData.labels) {
@@ -623,8 +670,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         loadedCount++;
                         // 모든 작업자 로드 완료 시 차트 재렌더링 (DOM 렌더링 대기)
                         if (loadedCount === totalWorkers) {
-                            console.log('🕐 전역 시간 범위:', window.globalHourRange.min + '시 ~', window.globalHourRange.max + '시');
-                            console.log('📊 저장된 작업자 수:', Object.keys(window.workerHourlyDataStore).length);
+                            log.debug('🕐 전역 시간 범위:', window.globalHourRange.min + '시 ~', window.globalHourRange.max + '시');
+                            log.debug('📊 저장된 작업자 수:', Object.keys(window.workerHourlyDataStore).length);
                             // DOM이 완전히 렌더링된 후 차트 생성
                             setTimeout(function() {
                                 updateAllHourlyCharts();
@@ -639,17 +686,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // 모든 작업자의 시간대별 차트를 동일 범위로 재렌더링
     function updateAllHourlyCharts() {
         const range = window.globalHourRange;
-        console.log('🔄 차트 재렌더링 시작, 범위:', range.min + '시 ~', range.max + '시');
-        console.log('📦 저장된 데이터 키:', Object.keys(window.workerHourlyDataStore));
+        log.debug('🔄 차트 재렌더링 시작, 범위:', range.min + '시 ~', range.max + '시');
+        log.debug('📦 저장된 데이터 키:', Object.keys(window.workerHourlyDataStore));
 
         Object.keys(window.workerHourlyDataStore).forEach(function(detailId) {
             const hourlyData = window.workerHourlyDataStore[detailId] || { labels: [], values: [] };
-            console.log('📊 [' + detailId + '] hourlyData:', JSON.stringify(hourlyData).substring(0, 200));
+            log.debug('📊 [' + detailId + '] hourlyData:', JSON.stringify(hourlyData).substring(0, 200));
 
             const hourlyChartId = 'hourly-chart-' + detailId;
             const hourlyCtx = document.getElementById(hourlyChartId);
             if (!hourlyCtx) {
-                console.log('❌ 캔버스 없음:', hourlyChartId);
+                log.debug('❌ 캔버스 없음:', hourlyChartId);
                 return;
             }
 
@@ -668,14 +715,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const hourValueMap = {};
             const labels = hourlyData.labels || [];
             const values = hourlyData.values || [];
-            console.log('📊 [' + detailId + '] labels 수:', labels.length, ', values 수:', values.length);
+            log.debug('📊 [' + detailId + '] labels 수:', labels.length, ', values 수:', values.length);
             for (let i = 0; i < labels.length; i++) {
                 const hourMatch = String(labels[i]).match(/(\d+)/);
                 if (hourMatch) {
                     hourValueMap[parseInt(hourMatch[1])] = values[i] || 0;
                 }
             }
-            console.log('📊 [' + detailId + '] hourValueMap:', JSON.stringify(hourValueMap));
+            log.debug('📊 [' + detailId + '] hourValueMap:', JSON.stringify(hourValueMap));
 
             // 전역 범위로 라벨/값 생성 (7시~20시 기본)
             const rangeLabels = [];
@@ -685,7 +732,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 rangeValues.push(hourValueMap[h] || 0);
             }
 
-            console.log('📊 차트 생성:', detailId, '라벨:', rangeLabels, '값:', rangeValues);
+            log.debug('📊 차트 생성:', detailId, '라벨:', rangeLabels, '값:', rangeValues);
 
             // 새 차트 생성
             try {
@@ -712,7 +759,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 });
             } catch (e) {
-                console.error('❌ 차트 생성 실패:', detailId, e);
+                log.error('❌ 차트 생성 실패:', detailId, e);
             }
         });
     }
@@ -939,7 +986,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const endDate = new Date(state.end_date);
         const daysDiff = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
 
-        console.log('📊 차트 날짜 범위:', state.start_date, '~', state.end_date, '(' + daysDiff + '일)');
+        log.debug('📊 차트 날짜 범위:', state.start_date, '~', state.end_date, '(' + daysDiff + '일)');
 
         let labels, values, chartTitle, chartType;
         let dailyData = {};  // 일별 데이터 저장용
@@ -1090,7 +1137,7 @@ document.addEventListener('DOMContentLoaded', () => {
             avgLabel = '과거 월별 평균 (' + totalAvg.toFixed(0) + ' PCS)';
         }
 
-        console.log('📊 차트 타입:', chartType, '| 제목:', chartTitle, '| 데이터 포인트:', labels.length, '| 과거 평균:', avgLabel);
+        log.debug('📊 차트 타입:', chartType, '| 제목:', chartTitle, '| 데이터 포인트:', labels.length, '| 과거 평균:', avgLabel);
 
         const ctx = document.getElementById(canvasId);
         const isMobileChart = window.innerWidth <= 768;
@@ -1177,7 +1224,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const endDate = new Date(state.end_date);
         const daysDiff = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
 
-        console.log('📊 차트 날짜 범위:', state.start_date, '~', state.end_date, '(' + daysDiff + '일)');
+        log.debug('📊 차트 날짜 범위:', state.start_date, '~', state.end_date, '(' + daysDiff + '일)');
 
         // 데이터 준비
         const sessions = data.filtered_sessions_data || [];
@@ -1243,14 +1290,14 @@ document.addEventListener('DOMContentLoaded', () => {
             chartTitle = '월별 파렛트 수 (' + Math.ceil(daysDiff / 30) + '개월)';
         }
 
-        console.log('📊 차트 타입:', aggregationType, '| 데이터 포인트:', labels.length);
+        log.debug('📊 차트 타입:', aggregationType, '| 데이터 포인트:', labels.length);
 
         // 차트 생성 (비동기로 브라우저 멈춤 방지)
         setTimeout(function() {
             try {
                 const ctx = document.getElementById('productionChart');
                 if (!ctx) {
-                    console.error('Canvas 요소를 찾을 수 없습니다');
+                    log.error('Canvas 요소를 찾을 수 없습니다');
                     return;
                 }
 
@@ -1287,9 +1334,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                 });
-                console.log('✅ 차트 생성 완료');
+                log.debug('✅ 차트 생성 완료');
             } catch (error) {
-                console.error('❌ 차트 생성 실패:', error);
+                log.error('❌ 차트 생성 실패:', error);
                 container.querySelector('div').innerHTML += '<p style="color: red; margin-top: 20px;">⚠️ 차트 생성 실패: ' + error.message + '</p>';
             }
         }, 100);
@@ -2023,7 +2070,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const modalBody = document.getElementById('barcode-modal-body');
 
         if (!barcodeInput || !searchBtn) {
-            console.log('⚠️ 바코드 검색 요소 없음');
+            log.debug('⚠️ 바코드 검색 요소 없음');
             return;
         }
 
@@ -2206,7 +2253,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        console.log('✅ 바코드 검색 기능 활성화');
+        log.debug('✅ 바코드 검색 기능 활성화');
     }
 
     // 모바일 메뉴 토글
@@ -2241,7 +2288,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 초기 로딩
-    console.log('🚀 초기 데이터 로딩 시작');
+    log.debug('🚀 초기 데이터 로딩 시작');
     loadData();
 
     // 바코드 검색 초기화
@@ -2281,7 +2328,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error('API 오류');
 
             const data = await response.json();
-            console.log('🔍 [' + detailId + '] API 응답:', {
+            log.debug('🔍 [' + detailId + '] API 응답:', {
                 worker: data.worker,
                 hourly_data_exists: !!data.hourly_data,
                 hourly_labels_count: data.hourly_data ? data.hourly_data.labels?.length : 0,
@@ -2399,18 +2446,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // DOM 업데이트 완료 후 콜백 호출 (hourly_data 전달)
             if (onDataLoaded) {
-                console.log('📤 [' + detailId + '] 콜백 호출 (DOM 업데이트 완료 후)');
+                log.debug('📤 [' + detailId + '] 콜백 호출 (DOM 업데이트 완료 후)');
                 onDataLoaded(data.hourly_data);
             }
 
         } catch (error) {
-            console.error('작업자 데이터 로딩 실패:', error);
+            log.error('작업자 데이터 로딩 실패:', error);
             contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">데이터 로딩 실패: ' + escapeHtml(error.message) + '</div>';
             if (onDataLoaded) onDataLoaded(null);
         }
     };
 
-    console.log('✅ 작업자 상세 정보 로드 기능 초기화 완료');
+    log.debug('✅ 작업자 상세 정보 로드 기능 초기화 완료');
 });
 
-console.log('✅ 향상된 버전 스크립트 로드 완료');
+log.debug('✅ 향상된 버전 스크립트 로드 완료');

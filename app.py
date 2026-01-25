@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import re
+import logging
 from io import BytesIO
 
 from flask import Flask, jsonify, render_template, request, Response
@@ -23,6 +24,19 @@ from watchdog.events import FileSystemEventHandler
 from db_manager import DatabaseManager
 from analyzer_optimized import WorkerPerformance, OptimizedDataAnalyzer
 from config.app_config import config as app_config
+from cache_manager import SessionCache
+
+# ============ 로깅 설정 ============
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger('WorkerAnalysis')
+
+# ============ 정규식 사전 컴파일 ============
+WORKER_NAME_PREFIX_PATTERN = re.compile(r'^[.\s\\\/\-_]+')
+WORKER_NAME_SUFFIX_PATTERN = re.compile(r'[.\s\\\/\-_]+$')
 
 def convert_to_json_serializable(obj):
     """NumPy/Pandas 타입을 JSON 직렬화 가능한 타입으로 변환"""
@@ -67,10 +81,10 @@ def normalize_worker_name(name):
     if not name or not isinstance(name, str):
         return name
 
-    # 앞뒤 공백 및 특수문자 제거
+    # 앞뒤 공백 및 특수문자 제거 (사전 컴파일된 정규식 사용)
     normalized = name.strip()
-    normalized = re.sub(r'^[.\s\\\/\-_]+', '', normalized)  # 앞쪽 특수문자 제거
-    normalized = re.sub(r'[.\s\\\/\-_]+$', '', normalized)  # 뒤쪽 특수문자 제거
+    normalized = WORKER_NAME_PREFIX_PATTERN.sub('', normalized)
+    normalized = WORKER_NAME_SUFFIX_PATTERN.sub('', normalized)
 
     # 알려진 오타/누락 수정 (설정에서 로드)
     corrections = app_config.worker.WORKER_CORRECTIONS
@@ -95,10 +109,13 @@ DB_PATH = '/root/WorkerAnalysisGUI-web/data/worker_analysis.db'
 app = Flask(__name__)
 
 # 보안 모듈 적용
-from security import setup_security, InputValidator, rate_limit, validate_date_params
+from security import setup_security, InputValidator, rate_limit, validate_date_params, handle_api_error
 setup_security(app)
 
 socketio = SocketIO(app, async_mode='eventlet')
+
+# 세션 캐시 초기화
+session_cache = SessionCache()
 
 # Stock Ledger Blueprint 등록
 from blueprints.stock import stock_bp
@@ -112,14 +129,14 @@ def stock_connect():
     """재고 원장 실시간 연결"""
     stock_viewers.add(request.sid)
     socketio.emit('viewer_count', len(stock_viewers), namespace='/stock')
-    print(f"[Stock] 클라이언트 연결: {request.sid} (총 {len(stock_viewers)}명)")
+    logger.info(f"[Stock] 클라이언트 연결: {request.sid} (총 {len(stock_viewers)}명)")
 
 @socketio.on('disconnect', namespace='/stock')
 def stock_disconnect():
     """재고 원장 연결 해제"""
     stock_viewers.discard(request.sid)
     socketio.emit('viewer_count', len(stock_viewers), namespace='/stock')
-    print(f"[Stock] 클라이언트 연결 해제: {request.sid} (총 {len(stock_viewers)}명)")
+    logger.info(f"[Stock] 클라이언트 연결 해제: {request.sid} (총 {len(stock_viewers)}명)")
 
 def notify_stock_update(entry_data):
     """재고 변경 알림 (외부에서 호출 가능)"""
@@ -149,7 +166,7 @@ class LogFileHandler(FileSystemEventHandler):
         if time.time() - self.last_triggered_time < 5: return
         if not event.is_directory and "작업이벤트로그" in str(os.path.basename(event.src_path)):
             self.last_triggered_time = time.time()
-            print(f"파일 변경 감지: {event.src_path}. 증분 동기화 트리거...")
+            logger.info(f"파일 변경 감지: {event.src_path}. 증분 동기화 트리거...")
             # 증분 동기화 실행 (백그라운드)
             threading.Thread(target=run_incremental_sync, daemon=True).start()
             self.socketio.emit('data_updated', {'message': 'Log file has been modified.'})
@@ -165,18 +182,18 @@ def run_incremental_sync():
             timeout=300
         )
         if result.returncode == 0:
-            print("증분 동기화 성공")
+            logger.info("증분 동기화 성공")
         else:
-            print(f"증분 동기화 실패: {result.stderr.decode()}")
+            logger.error(f"증분 동기화 실패: {result.stderr.decode()}")
     except Exception as e:
-        print(f"증분 동기화 오류: {e}")
+        logger.error(f"증분 동기화 오류: {e}")
 
 def start_file_monitor():
     event_handler = LogFileHandler(socketio)
     observer = Observer()
     observer.schedule(event_handler, LOG_FOLDER_PATH, recursive=False)
     observer.start()
-    print(f"'{LOG_FOLDER_PATH}' 폴더에 대한 파일 감시를 시작합니다.")
+    logger.info(f"'{LOG_FOLDER_PATH}' 폴더에 대한 파일 감시를 시작합니다.")
     try:
         while True: time.sleep(1)
     except KeyboardInterrupt:
@@ -204,31 +221,49 @@ def calculate_kpis(sessions_df: pd.DataFrame) -> dict:
     }
 
 def analyze_dataframe(sessions_df: pd.DataFrame, radar_metrics: dict, full_sessions_df: pd.DataFrame = None):
-    """세션 데이터 분석"""
+    """세션 데이터 분석 (최적화: 일괄 집계)"""
     if sessions_df.empty:
         return {}, {}, None, pd.DataFrame()
 
-    # 작업자별 집계
+    # NaN/Infinity 안전 변환 함수
+    def safe_float(value, default=0.0):
+        if pd.isna(value) or np.isinf(value):
+            return default
+        return float(value)
+
+    # 최적화: 모든 메트릭을 한 번의 groupby.agg()로 계산 (N+1 쿼리 방지)
+    worker_agg = sessions_df.groupby('worker').agg({
+        'work_time': ['mean', 'std', 'count'],
+        'latency': 'mean',
+        'pcs_completed': ['sum', 'mean'],
+        'process_errors': 'sum',
+        'had_error': lambda x: (x == 0).sum()
+    })
+
+    # 컬럼 평탄화
+    worker_agg.columns = [
+        'avg_work_time', 'work_time_std', 'session_count',
+        'avg_latency',
+        'total_pcs_completed', 'avg_pcs_per_tray',
+        'total_process_errors',
+        'no_error_count'
+    ]
+    worker_agg = worker_agg.reset_index()
+
+    # WorkerPerformance 객체 생성
     worker_data = {}
-    for worker, group in sessions_df.groupby('worker'):
+    for _, row in worker_agg.iterrows():
+        worker = row['worker']
         perf = WorkerPerformance(worker=worker)
-        perf.session_count = len(group)
-
-        # NaN/Infinity 안전 변환 함수
-        def safe_float(value, default=0.0):
-            if pd.isna(value) or np.isinf(value):
-                return default
-            return float(value)
-
-        perf.avg_work_time = safe_float(group['work_time'].mean())
-        perf.avg_latency = safe_float(group['latency'].mean())
-        perf.total_pcs_completed = int(group['pcs_completed'].sum())
-        perf.total_process_errors = int(group['process_errors'].sum())
-        perf.first_pass_yield = safe_float((group['had_error'] == 0).sum() / len(group))
-        perf.avg_pcs_per_tray = safe_float(group['pcs_completed'].mean())
-        perf.work_time_std = safe_float(group['work_time'].std())
-        perf.defect_rate = safe_float(group['process_errors'].sum() / group['pcs_completed'].sum()) if group['pcs_completed'].sum() > 0 else 0.0
-
+        perf.session_count = int(row['session_count'])
+        perf.avg_work_time = safe_float(row['avg_work_time'])
+        perf.avg_latency = safe_float(row['avg_latency'])
+        perf.total_pcs_completed = int(row['total_pcs_completed'])
+        perf.total_process_errors = int(row['total_process_errors'])
+        perf.first_pass_yield = safe_float(row['no_error_count'] / row['session_count']) if row['session_count'] > 0 else 0.0
+        perf.avg_pcs_per_tray = safe_float(row['avg_pcs_per_tray'])
+        perf.work_time_std = safe_float(row['work_time_std'])
+        perf.defect_rate = safe_float(row['total_process_errors'] / row['total_pcs_completed']) if row['total_pcs_completed'] > 0 else 0.0
         worker_data[worker] = perf
 
     kpis = calculate_kpis(sessions_df)
@@ -239,6 +274,46 @@ def analyze_dataframe(sessions_df: pd.DataFrame, radar_metrics: dict, full_sessi
 # Flask 라우트
 # ====================================================================
 
+@app.route('/health')
+def health_check():
+    """헬스체크 엔드포인트 - 서비스 상태 확인"""
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "2.0.0",
+        "components": {}
+    }
+
+    # 데이터베이스 연결 확인
+    try:
+        conn = db.get_connection()
+        cursor = conn.execute("SELECT COUNT(*) FROM sessions LIMIT 1")
+        cursor.fetchone()
+        conn.close()
+        health_status["components"]["database"] = "healthy"
+    except Exception as e:
+        health_status["status"] = "degraded"
+        health_status["components"]["database"] = f"unhealthy: {str(e)}"
+        logger.error(f"Health check - DB unhealthy: {e}")
+
+    # 캐시 상태 확인
+    try:
+        cache_size = len(session_cache.session_cache)
+        health_status["components"]["cache"] = f"healthy ({cache_size} items)"
+    except Exception as e:
+        health_status["components"]["cache"] = f"unhealthy: {str(e)}"
+
+    # 파일 감시 상태 (로그 폴더 존재 확인)
+    if os.path.exists(LOG_FOLDER_PATH):
+        health_status["components"]["log_folder"] = "healthy"
+    else:
+        health_status["status"] = "degraded"
+        health_status["components"]["log_folder"] = "unhealthy: folder not found"
+
+    status_code = 200 if health_status["status"] == "healthy" else 503
+    return jsonify(health_status), status_code
+
+
 @app.route('/')
 def index():
     cache_buster = str(int(time.time()))
@@ -247,7 +322,7 @@ def index():
 @app.route('/api/data', methods=['POST'])
 @validate_date_params('start_date', 'end_date')
 def get_analysis_data():
-    print("\n[API] /api/data 요청 시작 (DB 기반)")
+    logger.info("[API] /api/data 요청 시작 (DB 기반)")
     try:
         filters = request.json or {}
         process_mode = filters.get('process_mode', '이적실')
@@ -259,7 +334,7 @@ def get_analysis_data():
         if process_mode not in VALID_PROCESSES:
             return jsonify({"error": f"Invalid process_mode. Must be one of: {VALID_PROCESSES}"}), 400
 
-        print(f"[API] 공정={process_mode}, 기간={start_date}~{end_date}")
+        logger.info(f"[API] 공정={process_mode}, 기간={start_date}~{end_date}")
 
         # 데이터베이스에서 날짜 범위 가져오기
         if not start_date or not end_date:
@@ -273,13 +348,13 @@ def get_analysis_data():
             try:
                 selected_start = datetime.strptime(start_date, '%Y-%m-%d')
                 extended_start = (selected_start - timedelta(days=60)).strftime('%Y-%m-%d')
-                print(f"[API] 30일 평균용 확장 시작 날짜: {extended_start}")
+                logger.debug(f"[API] 30일 평균용 확장 시작 날짜: {extended_start}")
             except:
                 extended_start = None
 
         # 데이터베이스에서 세션 조회
         full_df = db.get_sessions(start_date=extended_start, end_date=end_date, process=process_mode)
-        print(f"[API] DB에서 {len(full_df)}개 세션 로드 완료 ({len(full_df) * 0.001:.2f}초 예상)")
+        logger.info(f"[API] DB에서 {len(full_df)}개 세션 로드 완료")
 
         # 포장실 데이터: 트레이 단위로 PCS 추정 (1 트레이 = 60 PCS)
         if process_mode == '포장실' and not full_df.empty:
@@ -287,19 +362,19 @@ def get_analysis_data():
             before_filter = len(full_df)
             full_df = full_df[~((full_df['work_time'] == 0) & (full_df['item_code'] == 'N/A'))].copy()
             if before_filter != len(full_df):
-                print(f"[API] 포장실 빈 레코드 제외: {before_filter}개 → {len(full_df)}개")
+                logger.debug(f"[API] 포장실 빈 레코드 제외: {before_filter}개 → {len(full_df)}개")
 
             original_total = full_df['pcs_completed'].sum()
             full_df['pcs_completed'] = 60  # 각 트레이당 60 PCS 추정
             estimated_total = full_df['pcs_completed'].sum()
-            print(f"[API] 포장실 PCS 추정 적용: {int(original_total):,} PCS (실제) → {int(estimated_total):,} PCS (추정, {len(full_df)}트레이 × 60)")
+            logger.debug(f"[API] 포장실 PCS 추정 적용: {int(original_total):,} → {int(estimated_total):,} PCS")
 
         # 테스트 데이터 제외 (설정에서 로드, 포장실의 1.0.5는 실제 작업자이므로 제외하지 않음)
         test_workers = app_config.worker.TEST_WORKERS.copy()
         if process_mode != '포장실':
             test_workers.append('1.0.5')  # 포장실 외에서는 1.0.5 제외
         full_df = full_df[~full_df['worker'].isin(test_workers)].copy()
-        print(f"[API] 테스트 작업자 제외 후: {len(full_df)}개 세션")
+        logger.debug(f"[API] 테스트 작업자 제외 후: {len(full_df)}개 세션")
 
         # 작업자명 정규화 (특수문자 제거 및 오타 수정)
         if not full_df.empty and 'worker' in full_df.columns:
@@ -307,10 +382,10 @@ def get_analysis_data():
             full_df['worker'] = full_df['worker'].apply(normalize_worker_name)
             normalized_workers = full_df['worker'].nunique()
             if original_workers != normalized_workers:
-                print(f"[API] 작업자명 정규화: {original_workers}명 → {normalized_workers}명 (중복 병합)")
+                logger.debug(f"[API] 작업자명 정규화: {original_workers}명 → {normalized_workers}명")
 
         if full_df.empty:
-            print("[API] 데이터 없음")
+            logger.info("[API] 데이터 없음")
             return jsonify({
                 'kpis': {}, 'worker_data': [], 'normalized_performance': [],
                 'workers': [], 'date_range': {'min': None, 'max': None},
@@ -328,7 +403,7 @@ def get_analysis_data():
             (full_df['worker'].isin(selected_workers))
         ].copy()
 
-        print(f"[API] 필터링 완료: {len(filtered_df)}개 세션")
+        logger.debug(f"[API] 필터링 완료: {len(filtered_df)}개 세션")
 
         # 분석 전 누락된 컬럼 추가
         if 'idle_time' not in filtered_df.columns:
@@ -352,7 +427,7 @@ def get_analysis_data():
         if normalized_df is not None and not normalized_df.empty:
             active_workers = list(active_worker_data.keys())
             normalized_df = normalized_df[normalized_df['worker'].isin(active_workers)]
-            print(f"[API] normalized_df 필터링 완료: {len(normalized_df)}명")
+            logger.debug(f"[API] normalized_df 필터링 완료: {len(normalized_df)}명")
 
         # JSON 직렬화
         worker_data_json = [perf.__dict__ for perf in worker_data.values()]
@@ -427,9 +502,9 @@ def get_analysis_data():
                             'end': recent_df['date'].max().isoformat()
                         }
                     }
-                    print(f"[API] 30일 평균 요약 생성: {len(daily_summary)}일치, 시간대별/요일별/주차별/월별 평균 포함")
+                    logger.debug(f"[API] 30일 평균 요약 생성: {len(daily_summary)}일치")
             except Exception as e:
-                print(f"[API] 30일 요약 오류: {e}")
+                logger.warning(f"[API] 30일 요약 오류: {e}")
 
         # 최근 30일 기준 KPI 범위 계산 (작업자가 적을 때 왜곡 방지)
         baseline_stats = {
@@ -491,9 +566,9 @@ def get_analysis_data():
                             'max': float(worker_stats['session_count'].max())
                         }
                     }
-                    print(f"[API] 30일 기준 KPI 범위 계산 완료: {len(worker_stats)}명 기준")
+                    logger.debug(f"[API] 30일 기준 KPI 범위 계산 완료: {len(worker_stats)}명")
             except Exception as e:
-                print(f"[API] 30일 기준 KPI 계산 오류: {e}")
+                logger.warning(f"[API] 30일 기준 KPI 계산 오류: {e}")
 
         # 응답 데이터
         safe_sessions_data = json.loads(filtered_df.replace([np.inf, -np.inf], np.nan).fillna('').to_json(orient='records', date_format='iso'))
@@ -512,7 +587,7 @@ def get_analysis_data():
         # 전체 비교 모드용 comparison_data 생성
         comparison_data = None
         if process_mode == '전체 비교':
-            print("[API] 전체 비교 데이터 생성 중...")
+            logger.info("[API] 전체 비교 데이터 생성 중...")
             try:
                 def calculate_process_kpis(df):
                     """공정별 KPI 계산"""
@@ -564,10 +639,10 @@ def get_analysis_data():
                     'trends': trends_data
                 }
 
-                print(f"[API] 전체 비교 데이터 생성 완료: {start_date}~{end_date} 기간 데이터 (검사실:{period_inspection_kpis['total_trays']}, 이적실:{period_transfer_kpis['total_trays']}, 포장실:{period_packaging_kpis['total_trays']})")
+                logger.info(f"[API] 전체 비교 데이터 생성 완료: 검사실:{period_inspection_kpis['total_trays']}, 이적실:{period_transfer_kpis['total_trays']}, 포장실:{period_packaging_kpis['total_trays']}")
 
             except Exception as e:
-                print(f"[API] 전체 비교 데이터 생성 오류: {e}")
+                logger.error(f"[API] 전체 비교 데이터 생성 오류: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -581,9 +656,9 @@ def get_analysis_data():
                 # 작업자명 정규화
                 hr_df['worker'] = hr_df['worker'].apply(normalize_worker_name)
                 hr_sessions_data = json.loads(hr_df.replace([np.inf, -np.inf], np.nan).fillna('').to_json(orient='records', date_format='iso'))
-                print(f"[API] HR용 전체 데이터: {len(hr_sessions_data)}개 세션, {hr_df['worker'].nunique()}명 작업자")
+                logger.debug(f"[API] HR용 전체 데이터: {len(hr_sessions_data)}개 세션")
         except Exception as e:
-            print(f"[API] HR 데이터 로드 오류: {e}")
+            logger.warning(f"[API] HR 데이터 로드 오류: {e}")
 
         response_data = {
             'kpis': convert_to_json_serializable(kpis),
@@ -610,7 +685,7 @@ def get_analysis_data():
         compressed_size = len(compressed_data)
         compression_ratio = (1 - compressed_size / original_size) * 100
 
-        print(f"[API] 압축 완료: {original_size:,} bytes → {compressed_size:,} bytes ({compression_ratio:.1f}% 감소)")
+        logger.debug(f"[API] 압축 완료: {original_size:,} → {compressed_size:,} bytes ({compression_ratio:.1f}% 감소)")
 
         compressed_response = Response(compressed_data)
         compressed_response.headers['Content-Encoding'] = 'gzip'
@@ -638,7 +713,7 @@ def search_barcode():
         if not InputValidator.validate_barcode(barcode):
             return jsonify({"error": "유효하지 않은 바코드 형식입니다."}), 400
 
-        print(f"[API] 바코드 검색: {barcode}")
+        logger.info(f"[API] 바코드 검색: {barcode}")
 
         conn = db.get_connection()
 
@@ -671,7 +746,7 @@ def search_barcode():
 
         # 실제 찾은 바코드로 업데이트
         actual_barcode = scan_row[4]
-        print(f"[API] 바코드 검색 결과: 입력={barcode}, 찾음={actual_barcode}")
+        logger.debug(f"[API] 바코드 검색 결과: 입력={barcode}, 찾음={actual_barcode}")
 
         # SCAN_OK 정보 파싱
         try:
@@ -779,11 +854,11 @@ def get_realtime_data():
         process_mode = request.args.get('process_mode', '이적실')
         today = datetime.now().date().isoformat()
 
-        print(f"[API] 실시간 데이터 요청: {process_mode}, 날짜={today}")
+        logger.info(f"[API] 실시간 데이터 요청: {process_mode}, 날짜={today}")
 
         # 오늘 날짜 세션 조회
         today_sessions_df = db.get_sessions(start_date=today, end_date=today, process=process_mode)
-        print(f"[API] 오늘 세션: {len(today_sessions_df)}개")
+        logger.debug(f"[API] 오늘 세션: {len(today_sessions_df)}개")
 
         # 포장실 데이터: 트레이 단위로 PCS 추정 (1 트레이 = 60 PCS)
         if process_mode == '포장실' and not today_sessions_df.empty:
@@ -792,7 +867,7 @@ def get_realtime_data():
         # 오늘 데이터가 없으면 최근 작업일 데이터 조회
         display_date = today
         if today_sessions_df.empty:
-            print("[API] 오늘 데이터 없음, 최근 작업일 조회 중...")
+            logger.debug("[API] 오늘 데이터 없음, 최근 작업일 조회 중...")
             # 최근 7일 내 데이터 조회
             seven_days_ago = (datetime.now() - timedelta(days=7)).date().isoformat()
             recent_df = db.get_sessions(start_date=seven_days_ago, end_date=today, process=process_mode)
@@ -806,7 +881,7 @@ def get_realtime_data():
                 latest_date = recent_df['date'].max()
                 display_date = latest_date.strftime('%Y-%m-%d')
                 today_sessions_df = recent_df[recent_df['date'] == latest_date].copy()
-                print(f"[API] 최근 작업일 데이터 사용: {display_date}, {len(today_sessions_df)}개 세션")
+                logger.debug(f"[API] 최근 작업일 데이터 사용: {display_date}, {len(today_sessions_df)}개 세션")
 
         # 작업자별 집계
         worker_summary = pd.DataFrame()
@@ -1042,7 +1117,7 @@ def get_worker_hourly():
         if process_mode not in VALID_PROCESSES:
             return jsonify({"error": f"Invalid process_mode"}), 400
 
-        print(f"[API] 작업자 시간당 생산량: {worker}, {start_date}~{end_date}, {process_mode}")
+        logger.info(f"[API] 작업자 시간당 생산량: {worker}, {start_date}~{end_date}, {process_mode}")
 
         # 세션 데이터 조회 (선택 기간용 - 시간대별 생산량, 요약 통계)
         sessions_df = db.get_sessions(start_date=start_date, end_date=end_date, process=process_mode)
@@ -1266,11 +1341,11 @@ def export_error_log():
 # SocketIO 이벤트
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
+    logger.debug('Client connected')
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
+    logger.debug('Client disconnected')
 
 # 애플리케이션 실행
 if __name__ == '__main__':
@@ -1287,12 +1362,11 @@ if __name__ == '__main__':
     sync_thread = threading.Thread(target=periodic_sync, daemon=True)
     sync_thread.start()
 
-    print("데이터베이스 기반 Flask 서버를 시작합니다. http://127.0.0.1:8089 에서 접속하세요.")
-    print(f"데이터베이스: {DB_PATH}")
-    print("적용된 최적화:")
-    print("- SQLite 데이터베이스 사용")
-    print("- 실시간 증분 동기화 (5분 간격 + 파일 변경 감지)")
-    print("- 응답 압축 (GZIP)")
-    print("- 인덱싱 최적화")
+    logger.info("=" * 50)
+    logger.info("데이터베이스 기반 Flask 서버를 시작합니다.")
+    logger.info(f"URL: http://127.0.0.1:8089")
+    logger.info(f"데이터베이스: {DB_PATH}")
+    logger.info("적용된 최적화: SQLite DB, 증분 동기화, GZIP 압축, 인덱싱")
+    logger.info("=" * 50)
 
     socketio.run(app, host='0.0.0.0', port=8089, debug=True, use_reloader=False)

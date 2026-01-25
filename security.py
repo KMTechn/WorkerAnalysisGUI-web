@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 security.py - Flask Application Security Module
-보안 미들웨어, 입력 검증, Rate Limiting, 접근 코드 인증
+보안 미들웨어, 입력 검증, Rate Limiting, 접근 코드 인증, CSRF 보호
 """
 
 import os
@@ -18,8 +18,84 @@ from flask import request, jsonify, g, session, redirect, url_for, render_templa
 import logging
 
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 security_logger = logging.getLogger('security')
+
+# ============ Environment Detection ============
+
+def is_production():
+    """프로덕션 환경 여부 확인"""
+    return os.environ.get('FLASK_ENV', 'production') == 'production'
+
+def is_https_enabled():
+    """HTTPS 활성화 여부 확인"""
+    return os.environ.get('HTTPS_ENABLED', 'false').lower() == 'true'
+
+# ============ CSRF Protection ============
+
+class CSRFProtection:
+    """간단한 CSRF 보호 구현"""
+
+    TOKEN_NAME = 'csrf_token'
+    TOKEN_LENGTH = 32
+
+    @staticmethod
+    def generate_token():
+        """CSRF 토큰 생성"""
+        if CSRFProtection.TOKEN_NAME not in session:
+            session[CSRFProtection.TOKEN_NAME] = secrets.token_hex(CSRFProtection.TOKEN_LENGTH)
+        return session[CSRFProtection.TOKEN_NAME]
+
+    @staticmethod
+    def validate_token(token):
+        """CSRF 토큰 검증"""
+        stored_token = session.get(CSRFProtection.TOKEN_NAME)
+        if not stored_token or not token:
+            return False
+        return secrets.compare_digest(stored_token, token)
+
+    @staticmethod
+    def get_token_from_request():
+        """요청에서 CSRF 토큰 추출"""
+        # 헤더에서 확인
+        token = request.headers.get('X-CSRF-Token')
+        if token:
+            return token
+        # Form 데이터에서 확인
+        if request.form:
+            token = request.form.get('csrf_token')
+            if token:
+                return token
+        # JSON 데이터에서 확인
+        if request.is_json:
+            data = request.get_json(silent=True)
+            if data and isinstance(data, dict):
+                return data.get('csrf_token')
+        return None
+
+
+def csrf_exempt(f):
+    """CSRF 검증 제외 데코레이터"""
+    f._csrf_exempt = True
+    return f
+
+
+def csrf_protect(f):
+    """CSRF 보호 데코레이터 (명시적으로 보호할 때 사용)"""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+            token = CSRFProtection.get_token_from_request()
+            if not CSRFProtection.validate_token(token):
+                security_logger.warning(f"CSRF 토큰 검증 실패: {get_client_ip()}")
+                return jsonify({"error": "CSRF token invalid or missing"}), 403
+        return f(*args, **kwargs)
+    return wrapper
+
 
 # ============ Configuration ============
 
@@ -540,6 +616,54 @@ def validate_date_params(*date_fields):
     return decorator
 
 
+# ============ Standardized Error Handler ============
+
+# 사용자 친화적 에러 메시지 매핑
+ERROR_MESSAGES = {
+    'timeout': '요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.',
+    'network': '네트워크 오류가 발생했습니다. 연결 상태를 확인해주세요.',
+    'server': '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
+    'unauthorized': '접근 권한이 없습니다. 다시 로그인해주세요.',
+    'validation': '입력 데이터가 올바르지 않습니다.',
+    'not_found': '요청한 데이터를 찾을 수 없습니다.',
+    'database': '데이터베이스 오류가 발생했습니다.'
+}
+
+
+def handle_api_error(f):
+    """API 에러 핸들링 표준화 데코레이터"""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ValueError as e:
+            security_logger.warning(f"Validation error in {f.__name__}: {e}")
+            return jsonify({
+                "error": ERROR_MESSAGES['validation'],
+                "detail": str(e),
+                "type": "validation"
+            }), 400
+        except TimeoutError as e:
+            security_logger.error(f"Timeout in {f.__name__}: {e}")
+            return jsonify({
+                "error": ERROR_MESSAGES['timeout'],
+                "type": "timeout"
+            }), 504
+        except ConnectionError as e:
+            security_logger.error(f"Connection error in {f.__name__}: {e}")
+            return jsonify({
+                "error": ERROR_MESSAGES['database'],
+                "type": "database"
+            }), 503
+        except Exception as e:
+            security_logger.error(f"Unhandled error in {f.__name__}: {e}", exc_info=True)
+            return jsonify({
+                "error": ERROR_MESSAGES['server'],
+                "type": "server"
+            }), 500
+    return wrapper
+
+
 # ============ Security Headers ============
 
 def add_security_headers(response):
@@ -562,11 +686,14 @@ def setup_security(app):
     # Secret Key 설정
     app.config['SECRET_KEY'] = generate_secret_key()
 
-    # Session 보안 설정
-    app.config['SESSION_COOKIE_SECURE'] = False  # HTTP에서도 동작하도록 (내부망)
+    # Session 보안 설정 (환경변수 기반)
+    # HTTPS가 활성화된 경우에만 SECURE 플래그 설정
+    app.config['SESSION_COOKIE_SECURE'] = is_https_enabled()
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)  # 세션 유지 7일
+
+    security_logger.info(f"Session security: SECURE={app.config['SESSION_COOKIE_SECURE']}, ENV={os.environ.get('FLASK_ENV', 'production')}")
 
     # 로그인 라우트 등록
     @app.route('/login', methods=['GET', 'POST'])
